@@ -1,0 +1,14 @@
+{"trip_id":"","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"4.500"}
+{"trip_id":"   ","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"4.500"}
+{"trip_id":"trip-bad-time","pickup_at":"not-a-timestamp","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"4.500"}
+{"trip_id":"trip-naive","pickup_at":"2024-06-01T12:00:00","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"4.500"}
+{"trip_id":"trip-order","pickup_at":"2024-06-01T12:20:00Z","dropoff_at":"2024-06-01T12:00:00Z","trip_distance":"4.500"}
+{"trip_id":"trip-utc-order","pickup_at":"2024-06-01T10:00:00-03:00","dropoff_at":"2024-06-01T12:30:00Z","trip_distance":"4.500"}
+{"trip_id":"trip-negative","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"-1.250"}
+{"trip_id":"trip-nan","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"NaN"}
+{"trip_id":"trip-inf","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"Infinity"}
+{"trip_id":"trip-neginf","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"-Infinity"}
+{"trip_id":"trip-scale","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"1.2345"}
+{"trip_id":"trip-extra","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"4.500","fare":"9.000"}
+{"pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":"4.500"}
+{"trip_id":"trip-bool","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:20:00Z","trip_distance":true}

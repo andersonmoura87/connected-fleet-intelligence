@@ -1,0 +1,4 @@
+{"trip_id":"trip-100","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:10:00Z","trip_distance":"1.000","source_zone":"zone-a","destination_zone":"zone-a"}
+{"trip_id":"trip-100","pickup_at":"2024-06-01T12:00:00Z","dropoff_at":"2024-06-01T12:10:00Z","trip_distance":"1.000","source_zone":"zone-a","destination_zone":"zone-a"}
+{"trip_id":"trip-200","pickup_at":"2024-06-01T15:00:00Z","dropoff_at":"2024-06-01T15:05:00Z","trip_distance":"2.000"}
+{"trip_id":"trip-200","pickup_at":"2024-06-01T15:00:00Z","dropoff_at":"2024-06-01T15:05:00Z","trip_distance":"2.500"}

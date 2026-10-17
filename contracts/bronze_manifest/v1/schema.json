@@ -1,0 +1,58 @@
+{
+  "additionalProperties": false,
+  "contract_name": "bronze_manifest",
+  "contract_version": "1",
+  "description": "Sealed description of one published Bronze directory.",
+  "properties": {
+    "created_at": {
+      "description": "UTC timestamp of the creating execution, with a Z suffix.",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dataset_version": {
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "input_sha256": {
+      "description": "Lowercase SHA-256 of the original bytes.",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "input_size_bytes": {
+      "minimum": 0,
+      "title": "Input Size Bytes",
+      "type": "integer"
+    },
+    "manifest_version": {
+      "description": "Schema version of this manifest. Only '1' is accepted.",
+      "title": "Manifest Version",
+      "type": "string"
+    },
+    "run_id": {
+      "description": "Execution that created the artifact. Not part of logical identity.",
+      "title": "Run Id",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "status": {
+      "description": "Published artifacts use the status published.",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "manifest_version",
+    "source_id",
+    "dataset_version",
+    "input_sha256",
+    "input_size_bytes",
+    "run_id",
+    "created_at",
+    "status"
+  ],
+  "title": "bronze_manifest",
+  "type": "object"
+}

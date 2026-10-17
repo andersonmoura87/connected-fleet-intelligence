@@ -1,6 +1,6 @@
 # System Design v0.2
 
-Status: proposed; diagrams describe intended components, not deployed resources.
+Status: proposed. The diagram describes intended components, not deployed resources. Local Bronze ingestion is implemented. Silver, Gold, the API, containers, and cloud resources are not.
 
 ## Architectural principles
 1. Solve a business problem before adding a platform component.
@@ -36,7 +36,7 @@ flowchart TB
 ## Data boundaries
 - Public trips: recorded source and dataset version; no claim of per-second truck sensor telemetry.
 - Synthetic events: synthetic=true, generator version, seed, generated_at; never used to claim observed real-world predictive accuracy.
-- Bronze: immutable original bytes with checksum and manifest.
+- Bronze: immutable original bytes with checksum and manifest v1. One published directory exists per `(source_id, dataset_version)` under `{data_root}/bronze/sources/`. The checksum is sealed in the manifest and is not a directory name. A same-volume temporary directory under `{data_root}/bronze/.incoming/` is renamed onto that path only when the destination is absent. An OS-held lock, one per source identity, lives at `{data_root}/bronze/locks/`. The vertical slice records the field list, CLI, limits, and recovery. This layout was exercised on Windows and on WSL2 Linux. It is local filesystem storage, not a deployed lake.
 - Silver: typed rows and quality outcomes; preserve source lineage.
 - Gold: reproducible aggregates, clearly defined denominators and filters.
 - ML: separate training/evaluation artifacts and leakage checks.
@@ -57,4 +57,4 @@ Source unavailable -> fail with no advancement; invalid schema -> quarantine; in
 ADR-0001 modular monolith; ADR-0002 local Parquet/DuckDB; ADR-0003 immutable provenance; ADR-0004 Databricks optional adapter; ADR-0005 Docker before Kubernetes; ADR-0006 staged cloud provisioning; ADR-0007 security and cost gates.
 
 ## Open decisions
-Dataset license and pinned sample; dataset schema; storage layout; exact cloud account access; acceptable spend; Databricks Free Edition capability test; target SLO after measurement.
+Dataset license and pinned sample; public-sample field mapping; Silver, Gold, and API storage; exact cloud account access; acceptable spend; Databricks Free Edition capability test; target SLO after measurement. The Bronze directory layout is no longer open: it is the layout in the vertical slice.

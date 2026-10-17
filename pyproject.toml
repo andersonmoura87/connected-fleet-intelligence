@@ -15,6 +15,9 @@ dev = [
     "ruff>=0.9",
 ]
 
+[project.scripts]
+cfi = "cfi.interfaces.cli:main"
+
 [build-system]
 requires = ["hatchling>=1.26"]
 build-backend = "hatchling.build"

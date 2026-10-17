@@ -12,25 +12,29 @@ Indicative 16-week delivery sequence, assuming approximately 8 hours/week. Re-pl
 
 ## Vertical Slice 001 increment sequence
 
-Phase 1 builds the local reference in this order. Later rows are planned and are not implemented with INC-001.
+Phase 1 builds the local reference in this order. INC-001, INC-002, and INC-003 are present in the repository. INC-004 and later rows are specified and not implemented.
 
 | Increment | Scope | Notes |
 |---|---|---|
 | INC-001 | Python foundation and quality tooling | Python 3.12, uv, Ruff, mypy, pytest. No data dependencies. |
 | INC-002 | Data contracts and deterministic fixtures | Canonical internal contract and synthetic fixture only. |
-| INC-003 | Bronze ingestion | Immutable original bytes, checksum, replay. |
+| INC-003 | Bronze ingestion | Implemented. Immutable original bytes, checksum, replay, and an OS-held lock per source identity. Publication renames a complete directory onto an absent final path. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
 | INC-004 | Silver transformation and quarantine | DuckDB is introduced here as the Parquet engine for Silver and quarantine. |
-| INC-005 | Gold operational metrics | Reuses the DuckDB engine from INC-004. Adds the published pointer and the exclusive publication lock. |
+| INC-005 | Gold operational metrics | Reuses the DuckDB engine from INC-004. Adds the Gold snapshot pointer and the exclusive lock for that pointer. |
 | INC-006 | FastAPI read endpoints | Reads the published snapshot. DuckDB stays off the request path. |
 | INC-007 | Integration, failure, and reproducibility tests | Includes contended publication. The container image follows this increment and is not part of its definition of done. |
 
 ### Artifact identity
 
-Bronze logical identity is `(source_id, dataset_version, input_sha256)`. Silver, quarantine, and Gold logical identity is that tuple plus `contract_version` and `transform_version`. `run_id` is execution lineage. A new `run_id` does not fork storage identity. Replay of an existing logical identity is a no-op. A changed checksum for an existing source identity fails closed.
+`source_identity` is `(source_id, dataset_version)`. Bronze logical identity is `(source_id, dataset_version, input_sha256)`. One published directory exists per `source_identity`. The checksum is sealed in the manifest and is not a second published directory. `run_id` is the lineage of the creating execution. Replay is a no-op and writes nothing. A changed checksum for the same `source_identity` fails closed. Silver, quarantine, and Gold add `contract_version` and `transform_version`.
 
-### Publication concurrency
+### Concurrency and durability
 
-Atomic file replace keeps a reader from observing a torn pointer. It does not serialize two publishers. The first increment that publishes a snapshot, INC-005, must take an exclusive lock on the data root for the whole publication transaction: generation write and pointer replace. A publisher that cannot acquire the lock exits nonzero, leaves the previous pointer in place, and does not write into a generation owned by the lock holder. INC-001 does not implement this lock.
+INC-003 locks one `source_identity` with an OS-held lock: `fcntl.flock` on Linux and `msvcrt.locking` on Windows. The operating system releases the lock when the process exits. The acquisition timeout starts at 30 seconds. A lock is not taken over because a timestamp aged out. The process revalidates the source identity after it acquires the lock. Process exclusion, abrupt release, and timeout were executed on Windows with `msvcrt.locking` and on WSL2 ext4 with `fcntl.flock`.
+
+INC-005 locks replacement of the Gold snapshot pointer. That lock is independent of the Bronze source lock. A contending Gold publisher leaves the previous pointer in place.
+
+Bronze becomes visible when a complete temporary directory is renamed onto a final path that does not exist. An existing final path is not replaced, including an empty directory. Windows uses `os.rename`, which refused an existing destination in the local run. Other platforms use `renameat2(RENAME_NOREPLACE)` and do not fall back to `os.rename`. That distinction was executed on WSL2 ext4. File contents are fsynced before the rename. This design has no measured durability across power loss. A second read of the input does not guarantee an atomic view of a source that changes during the read. Dry-run creates no directory, lock, temporary file, or persistent log.
 
 ### DuckDB
 

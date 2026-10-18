@@ -1,0 +1,83 @@
+{
+  "additionalProperties": false,
+  "contract_name": "trip_summary",
+  "contract_version": "1",
+  "description": "Metrics from one validated Gold snapshot.",
+  "properties": {
+    "aggregate_version": {
+      "title": "Aggregate Version",
+      "type": "string"
+    },
+    "average_duration_seconds": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Average Duration Seconds"
+    },
+    "contract_version": {
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "dataset_version": {
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "gold_contract_version": {
+      "title": "Gold Contract Version",
+      "type": "string"
+    },
+    "input_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "rejected_count": {
+      "minimum": 0,
+      "title": "Rejected Count",
+      "type": "integer"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "storage_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Storage Key",
+      "type": "string"
+    },
+    "total_distance_km": {
+      "title": "Total Distance Km",
+      "type": "string"
+    },
+    "transform_version": {
+      "title": "Transform Version",
+      "type": "string"
+    },
+    "trip_count": {
+      "minimum": 0,
+      "title": "Trip Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "source_id",
+    "dataset_version",
+    "input_sha256",
+    "storage_key",
+    "contract_version",
+    "transform_version",
+    "gold_contract_version",
+    "aggregate_version",
+    "trip_count",
+    "total_distance_km",
+    "average_duration_seconds",
+    "rejected_count"
+  ],
+  "title": "trip_summary",
+  "type": "object"
+}

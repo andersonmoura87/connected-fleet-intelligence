@@ -15,8 +15,9 @@ Present in the tree:
 - INC-003: local Bronze ingestion, manifest v1, and `cfi ingest`.
 - INC-004: `trip_record` v1.1.0, Bronze to Silver transformation, quarantine, and `cfi transform`.
 - INC-005: Gold publication from one Silver generation, immutable snapshot, and `cfi gold`.
+- INC-006: in-process read-only FastAPI routes over a published Gold pointer.
 
-The read API, container images, and cloud resources are not implemented. This is not a production platform.
+Container images and cloud resources are not implemented. There is no listening server and no deployment in this repository. This is not a production platform.
 
 INC-003, INC-004, and INC-005 were exercised on Windows 10.0.26200 with Python 3.12.15, and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3) using the versions pinned in `uv.lock`. DuckDB 1.5.6 reads and writes the Parquet files. The Docker engine was not running, so there is no container evidence. Details and limits are in the vertical slice.
 
@@ -48,9 +49,35 @@ DuckDB reads the two Parquet files. The totals are Python decimal arithmetic, no
 
 One pointer, `gold/published/{pointer_key}/current.json`, exists per `(source_id, dataset_version)`. The first intact publication creates it. `--promote` replaces an intact pointer that names a different intact snapshot. `--promote` does not repair a corrupt pointer, a missing snapshot, or a hash mismatch. `--dry-run` returns the decision and writes nothing.
 
+## Read API
+
+`create_app(data_root)` returns a FastAPI application. Tests call it with `TestClient`. `cfi serve` is not implemented, and these tests do not bind a port.
+
+`GET /health/live` returns `{"status": "live"}` when the application answers. It does not look for Bronze, Silver, Gold, or `current.json`, and it does not report readiness or data integrity.
+
+`GET /v1/trips/summary` requires `source_id` and `dataset_version`. The handler reads one `gold/published/{pointer_key}/current.json`, then `summary.json` and `manifest.json` under `gold/snapshots/{storage_key}/`. It does not call `cfi gold`, does not aggregate, does not open Bronze, Silver, or DuckDB, and does not create files or locks.
+
+The pointer bytes are captured once. A promotion that replaces `current.json` afterward can leave the response on the previous intact snapshot. The handler does not read the pointer again, and that promotion is not an error.
+
+An HTTP 200 body contains `source_id`, `dataset_version`, `input_sha256`, `storage_key`, `contract_version`, `transform_version`, `gold_contract_version`, `aggregate_version`, `trip_count`, `total_distance_km`, `average_duration_seconds`, and `rejected_count`. The two decimal fields are JSON strings. The average is null when `trip_count` is 0. Zero trips are still HTTP 200. The body has no `generated_at` and no `total_distance` field.
+
+| Status | Code | Condition |
+|---|---|---|
+| 200 | | Intact publication, including zero trips. |
+| 422 | `missing_parameter` | A required query parameter is absent. |
+| 422 | `invalid_identifier` | An identifier fails the storage rule. |
+| 404 | `not_published` | `current.json` is absent for that origin. |
+| 503 | `pointer_invalid` | The pointer fails JSON, schema, or identity checks. |
+| 503 | `snapshot_absent` | The snapshot named by the captured pointer is absent. |
+| 503 | `integrity_mismatch` | Hash, size, identity, or metrics disagree. |
+| 503 | `schema_mismatch` | The summary or the manifest fails its Gold schema. |
+| 500 | `path_limit`, `reparse_point`, `path_escape`, `storage_error` | Path limit, reparse point, escape, or another filesystem failure. |
+
+Error bodies are `{"code": "<code>"}`. They do not include a filesystem path or a traceback. A corrupt pointer or snapshot is not reported as 404.
+
 ## Toolchain
 
-The project targets Python 3.12 through uv. uv keeps that interpreter in its own cache and does not replace the system Python. Direct dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. The runtime dependencies are Pydantic v2 and DuckDB. Pandas and PyArrow are not direct dependencies.
+The project targets Python 3.12 through uv. uv keeps that interpreter in its own cache and does not replace the system Python. Direct dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. The runtime dependencies are Pydantic v2, DuckDB, and FastAPI. HTTPX is a development dependency used by `TestClient`. Pandas and PyArrow are not direct dependencies. The HTTP modules do not import DuckDB.
 
 Configured checks:
 

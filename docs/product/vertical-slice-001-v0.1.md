@@ -1,6 +1,6 @@
 # Vertical Slice 001 v0.1 — Public Trips to Read-only Metrics
 
-Status: Bronze ingestion, Silver transformation, and Gold publication are implemented. All three were exercised on Windows 10.0.26200 (Python 3.12.15) and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3, dependencies from `uv.lock`, DuckDB 1.5.6). The API is not implemented. These runs are local evidence, not a production certification. The Docker engine was not running.
+Status: Bronze ingestion, Silver transformation, Gold publication, and the read-only FastAPI routes are implemented. Bronze, Silver, and Gold were exercised on Windows 10.0.26200 (Python 3.12.15) and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3, dependencies from `uv.lock`, DuckDB 1.5.6). The HTTP routes are called in-process with `TestClient`. These runs are local evidence, not a production certification. The Docker engine was not running. There is no listening server.
 
 ## Goal
 From a small pinned synthetic trip fixture, validate records, publish immutable Bronze and typed Silver, compute a Gold summary, and serve it through a read-only FastAPI endpoint. A licensed public sample is a later, separate input. No network access is required for tests or dry run.
@@ -171,14 +171,18 @@ A crash after the rename can report an error while the directory is already visi
 - A published Bronze directory is not silently replaced.
 - One Silver generation directory is renamed into place only when that path is absent. It contains both Parquet files and the manifest. Invalid rows are quarantined with reason and lineage, without the rejected payload.
 - One Gold snapshot is renamed into place only when that path is absent. The pointer is a separate file. `--promote` is required to move an intact pointer from one intact snapshot to another.
-- The read API is not implemented.
+- `GET /v1/trips/summary` reads the captured pointer and that snapshot. It does not republish Gold, and a later promotion of the pointer is not an error.
 - Bronze ingests of one source identity are serialized by the OS lock. Silver publication of one generation identity uses its own lock. Gold uses a snapshot lock and, after releasing it, a pointer lock.
 - No personal data or secrets in logs.
 
-## API contract (proposed)
-`GET /health/live` -> 200 when process running.
-`GET /health/ready` -> 200 only when published Gold snapshot exists, otherwise 503.
-`GET /v1/trips/summary` -> `{dataset_version, trip_count, total_distance, average_duration_seconds, rejected_count, generated_at}`; use a fixed or injected clock for deterministic tests.
+## API contract
+`GET /health/live` returns 200 `{"status": "live"}` when the application answers. It does not check Bronze, Silver, Gold, or `current.json`.
+
+`GET /health`, `GET /health/ready`, and `GET /metrics` are not implemented. `cfi serve` is not implemented.
+
+`GET /v1/trips/summary?source_id=<id>&dataset_version=<version>` returns the metrics in [trip_summary v1](../../contracts/trip_summary/v1/README.md). Decimal metrics are JSON strings. The average is null when there are zero trips. The body includes `input_sha256` and `storage_key` and does not include `generated_at`.
+
+The handler captures one version of `current.json` and then validates the snapshot it names. It does not read the pointer again. HTTP 404 means that pointer file is absent. A corrupt pointer or snapshot is HTTP 503. A filesystem, path-limit, or reparse failure is HTTP 500. Error bodies are `{"code": "<code>"}`.
 
 ## Failure scenarios and tests
 1. Valid two-trip fixture -> two Silver rows and one Gold snapshot: `trip_count` 2, `total_distance_km` `12.750`, `average_duration_seconds` `1500.000000`, `rejected_count` 0. The invalid fixture publishes `trip_count` 0, `total_distance_km` `0.000`, a null average, and `rejected_count` 14. The conflict fixture publishes one trip, `1.000` km, average `600.000000`, and `rejected_count` 2. `duplicate_count` is not a weight.
@@ -188,7 +192,7 @@ A crash after the rename can report an error while the directory is already visi
 5. Repeated transform of the same generation -> `noop`, without rewriting the Parquet files or `created_at`. Two fresh writes are not required to be byte-identical.
 6. Missing or corrupt Bronze -> nonzero exit and no new generation.
 7. Dry run -> no filesystem mutation and no persistent log.
-8. API with missing snapshot -> not implemented.
+8. Missing `current.json` -> HTTP 404 `not_published`. A missing snapshot, a bad pointer, a hash mismatch, or a schema mismatch -> HTTP 503. The handler does not create the missing file.
 9. Malformed JSONL, invalid UTF-8, and an oversized absolute Silver path -> bounded failure and no published generation.
 10. Fixture tests do not call a network API. A separate network-blocked run was not executed.
 

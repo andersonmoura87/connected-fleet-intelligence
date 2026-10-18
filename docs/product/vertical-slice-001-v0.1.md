@@ -1,6 +1,6 @@
 # Vertical Slice 001 v0.1 — Public Trips to Read-only Metrics
 
-Status: Bronze ingestion is implemented. It was exercised on Windows 10.0.26200 (Python 3.12.15) and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3, dependencies from `uv.lock`). Silver, Gold, and the API are not implemented. These runs are local evidence, not a production certification. The Docker engine was not running.
+Status: Bronze ingestion and Silver transformation are implemented. Both were exercised on Windows 10.0.26200 (Python 3.12.15) and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3, dependencies from `uv.lock`, DuckDB 1.5.6). Gold and the API are not implemented. These runs are local evidence, not a production certification. The Docker engine was not running.
 
 ## Goal
 From a small pinned synthetic trip fixture, validate records, publish immutable Bronze and typed Silver, compute a Gold summary, and serve it through a read-only FastAPI endpoint. A licensed public sample is a later, separate input. No network access is required for tests or dry run.
@@ -14,44 +14,46 @@ From a small pinned synthetic trip fixture, validate records, publish immutable 
 Implemented:
 
 - `cfi ingest --input <path> --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]`
+- `cfi transform --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]`
 
 Still proposed, and not implemented:
 
-- `cfi transform --run-id <id> [--dry-run]`
 - `cfi serve --host 127.0.0.1 --port 8000`
 
-`--dataset-version` is required. It has no default. `--dry-run` evaluates the ingest decision and creates no directory, lock, temporary file, or persistent log. Stdout is one JSON object.
+`--dataset-version` is required. It has no default. `--dry-run` evaluates the decision and creates no directory, lock, temporary file, or persistent log. Stdout is one JSON object. Transform does not accept `contract_version` or `transform_version` as flags. Those values come from the code: `1.1.0` and `1`.
 
-Exit codes for `cfi ingest`:
+Exit codes for `cfi ingest` and `cfi transform`:
 
 | Code | Meaning |
 |---|---|
 | 0 | `published` or `noop` |
 | 2 | usage, invalid identifier, or rejected input |
-| 3 | identity conflict, incomplete artifact, checksum mismatch, or unstable input |
-| 4 | storage failure, cross-device rename, reparse point, or path escape |
+| 3 | identity conflict, incomplete artifact, checksum mismatch, unstable input, absent Bronze, or a Silver generation that does not match the recomputed rows |
+| 4 | storage failure, cross-device rename, reparse point, path escape, path length, or Parquet round-trip failure |
 | 5 | lock unavailable |
 
 ## Minimal data contract
-Required: trip_id (nonblank string), pickup_at (timezone-aware ISO8601), dropoff_at (timezone-aware ISO8601), trip_distance (finite number >= 0). Optional: source_zone, destination_zone. Provenance: source_id, dataset_version, input_sha256, run_id. Reject end before start, nonfinite numbers, duplicate conflicting trip IDs and invalid timestamps. Real public dataset field mapping must be versioned and documented; this is a canonical internal contract, not a claim about NYC TLC columns.
+Required: trip_id (nonblank string), pickup_at (timezone-aware ISO8601, at most six fractional digits), dropoff_at (same timestamp rule), trip_distance (finite number >= 0, fractional scale at most 3). Optional: source_zone, destination_zone. Provenance: source_id, dataset_version, input_sha256, run_id. Reject end before start, nonfinite numbers, duplicate conflicting trip IDs, invalid timestamps, and timestamp literals with more than six fractional digits. The executable row contract is `1.1.0`. Real public dataset field mapping must be versioned and documented; this is a canonical internal contract, not a claim about NYC TLC columns.
 
 ## Artifact identity
 `source_identity` is `(source_id, dataset_version)`. Bronze logical identity is `(source_id, dataset_version, input_sha256)`. One published directory exists for each `source_identity`. `input_sha256` is the SHA-256 of the stored bytes and is sealed in the manifest. It does not create a second published directory.
 
 `run_id` records the execution that created the artifact. Another `run_id` does not fork storage identity. Replay of the same bytes is a no-op and does not rewrite the bytes, the manifest, or `created_at`. A different checksum for the same `source_identity` fails closed and writes nothing. A new `dataset_version` is a new artifact even when the bytes match. The same bytes under another `source_id` are another artifact.
 
-Silver, quarantine, and Gold logical identity is the Bronze identity plus `contract_version` and `transform_version`.
+Silver logical identity is `(source_id, dataset_version, input_sha256, contract_version, transform_version)`. The current transform uses trip_record `1.1.0` and transform version `1`. The directory name is the SHA-256 of those fields, not the fields themselves. `run_id` is the creator recorded in the manifest and is not a path segment. Gold identity is not implemented.
 
 Bronze stores the original bytes, including rows that fail trip validation. Ingestion does not accept or reject trips.
 
 ## Concurrency
-Two locks cover different critical sections.
+Bronze and Silver use separate locks. The Gold pointer lock is specified and not implemented.
 
 INC-003 holds an OS-level exclusive lock for one `source_identity`. The operating system releases that lock when the holding process exits, including abrupt termination. Acquisition waits up to `CFI_LOCK_TIMEOUT_SECONDS`, initially 30 seconds. A waiter does not take over a lock because of its age. After acquisition, the process reads the source state again and only then publishes, replays, or fails closed. Linux uses `fcntl.flock`. Windows uses `msvcrt.locking`. Both come from the Python standard library. The lock excludes other processes that use it. Threads in one process, and programs that ignore the lock, are outside that guarantee. The marker file is not deleted on release or after a crash.
 
 Process tests for abrupt exit, timeout, and two concurrent publishers passed on Windows and on the WSL2 ext4 run. `fcntl.flock` was executed only in that Linux run. `msvcrt.locking` was executed only on Windows.
 
-INC-005 holds a separate exclusive lock around replacement of the Gold snapshot pointer for the data root. Readers of the snapshot do not take that write lock. A contending publisher fails closed and leaves the previous pointer in place. The Gold pointer lock is not the Bronze source lock.
+INC-004 holds a separate OS-level lock at `silver/locks/{storage_key}.lock`. It uses the same lock primitive and the same timeout. It is not the Bronze marker and it is not a Gold pointer lock. Transform does not take the Bronze lock. A Gold snapshot pointer is not implemented.
+
+INC-005 remains specified and not implemented. It would hold a separate exclusive lock around replacement of the Gold snapshot pointer. That lock is not the Bronze source lock and it is not the Silver generation lock.
 
 ## Publication and durability
 Bronze publication renames a complete temporary directory onto a final path that does not already exist. The temporary directory already contains the original bytes and the manifest, both flushed and fsynced. The rename does not replace an existing published directory, including an empty one. If the final path exists, the rename fails and the published artifact stays in place.
@@ -88,6 +90,32 @@ Manifest v1 fields are `manifest_version` (`1`), `source_id`, `dataset_version`,
 
 Identifiers match `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`, reject a trailing dot, and reject Windows device names. The initial input limit is 10 MiB (`CFI_MAX_INPUT_BYTES`).
 
+## Silver storage layout
+
+Transform locates Bronze only by `source_id` and `dataset_version`. It checks manifest v1, `published`, the original file, size, and SHA-256. It hashes the original again before the directory rename. That second read is not an atomic snapshot. Bronze bytes are not modified.
+
+Physical lines split on LF. A CRLF delimiter drops the CR. A bare CR stays in the line. An empty file has zero lines. A final delimiter does not add a line. Each line is decoded as UTF-8 without replacement. Invalid UTF-8, invalid JSON, a non-object, and an empty line are individual quarantine rows. JSON objects use the default parser and `validate_trip_record` at contract `1.1.0`. A timestamp literal with seven or more fractional digits is rejected before parsing, including when the extra digits are zero. The code is `timestamp_precision_exceeded`.
+
+Valid rows group by `trip_id`. Equal `TripRecord` values become one Silver row. `duplicate_count` is the group size and `line_number` is the earliest physical line. Any difference quarantines every valid row of that `trip_id` with `duplicate_conflict`. Invalid rows do not enter the group. Silver rows are ordered by `trip_id`. Quarantine rows are ordered by `line_number`. Quarantine stores the line hash and size, not the rejected payload.
+
+```text
+{CFI_DATA_ROOT}/silver/generations/{storage_key}/silver.parquet
+{CFI_DATA_ROOT}/silver/generations/{storage_key}/quarantine.parquet
+{CFI_DATA_ROOT}/silver/generations/{storage_key}/manifest.json
+{CFI_DATA_ROOT}/silver/locks/{storage_key}.lock
+{CFI_DATA_ROOT}/silver/.incoming/{token}/
+```
+
+`storage_key` is the SHA-256 of six UTF-8 lines, each ending in newline: `cfi-silver-generation-v1`, `source_id`, `dataset_version`, `input_sha256`, `contract_version`, `transform_version`. The manifest repeats the full identity. Before any write, the longest absolute path that publication would use must be at most 240 characters. There is no current-Silver pointer.
+
+DuckDB 1.5.6 writes both Parquet files from an in-memory connection, using ZSTD. The connection is closed before fsync and rename. `trip_distance` is `DECIMAL(18,3)`. Instants are stored as DuckDB `TIMESTAMP` containing UTC components at microsecond resolution. `TIMESTAMP WITH TIME ZONE` is not used, because materializing it required pytz in this DuckDB version, and pytz is not a dependency. A value that does not read back equal to the value written fails the transform before rename. `Decimal('1.5')` reads back as `Decimal('1.500')`, which compares equal. A distance that already has scale 3 keeps that scale. Empty outputs are Parquet files with the schema and zero rows.
+
+A sealed generation whose rows, hashes, schema, and counts match the recomputation returns `noop` and does not rewrite files or `created_at`. A sealed generation with different logical rows returns `transform_conflict` and leaves the directory in place. An incomplete directory is not repaired or replaced. Parquet bytes are not required to be identical across two separate writes. DuckDB version and compression are lineage in the manifest, not part of `storage_key`.
+
+Counts on every success satisfy `input_line_count = valid_record_count + invalid_record_count`, `valid_record_count = silver_record_count + identical_duplicate_extra_count + conflict_rejection_count`, and `quarantine_row_count = invalid_record_count + conflict_rejection_count`.
+
+Contracts: `contracts/trip_record/v1.1.0/`, `contracts/silver_trip/v1/`, `contracts/quarantine_record/v1/`, and `contracts/silver_generation/v1/`. The v1.0.0 trip schema remains frozen.
+
 ## Recovery
 
 A failure before the rename removes that execution's temporary directory when the process reaches cleanup. If the process is killed first, the unpublished temporary directory can remain under `.incoming`. A later ingest does not publish it and does not delete it.
@@ -100,10 +128,9 @@ A crash after the rename can report an error while the directory is already visi
 - Dry-run makes no filesystem changes, writes no persistent log, and never creates a cloud client.
 - Bronze original bytes are immutable; identical replay is a no-op; the same source identity with a changed checksum fails closed.
 - A published Bronze directory is not silently replaced.
-- Silver writes are atomic; invalid rows quarantined with reason and lineage.
-- Gold totals are deterministic; no double-count on replay; empty input produces explicit empty state.
-- API never serves a partially committed dataset; missing dataset returns documented 503 (not fabricated zero values).
-- Bronze ingests of one source identity are serialized by the OS lock. Gold pointer publication uses its own lock.
+- One Silver generation directory is renamed into place only when that path is absent. It contains both Parquet files and the manifest. Invalid rows are quarantined with reason and lineage, without the rejected payload.
+- Gold totals and the read API are not implemented.
+- Bronze ingests of one source identity are serialized by the OS lock. Silver publication of one generation identity uses its own lock.
 - No personal data or secrets in logs.
 
 ## API contract (proposed)
@@ -112,16 +139,18 @@ A crash after the rename can report an error while the directory is already visi
 `GET /v1/trips/summary` -> `{dataset_version, trip_count, total_distance, average_duration_seconds, rejected_count, generated_at}`; use a fixed or injected clock for deterministic tests.
 
 ## Failure scenarios and tests
-1. Valid two-trip fixture -> expected count/distance/duration.
-2. Invalid timestamp or negative distance -> quarantine with reason.
-3. Conflicting duplicate ID -> fail/quarantine according to explicit contract, never silently overwrite.
-4. Interrupted write -> previous published snapshot intact.
-5. Repeated ingest/transform -> byte-identical outputs or semantically identical manifests with stable logical identity.
-6. Missing input -> nonzero exit and no checkpoint advancement.
+1. Valid two-trip fixture -> two Silver rows. Distance and instants were checked. Gold averages are not computed.
+2. Invalid timestamp or negative distance -> one quarantine row per line, with the reason code.
+3. Conflicting duplicate ID -> every valid row of that `trip_id` is quarantined. The published generation is not replaced by a later conflicting recomputation.
+4. Interrupted write -> a crash before rename leaves no generation; a crash after rename leaves a generation that replays as `noop`.
+5. Repeated transform of the same generation -> `noop`, without rewriting the Parquet files or `created_at`. Two fresh writes are not required to be byte-identical.
+6. Missing or corrupt Bronze -> nonzero exit and no new generation.
 7. Dry run -> no filesystem mutation and no persistent log.
-8. API with missing snapshot -> 503; with published snapshot -> validated 200.
-9. Malformed or oversized file -> bounded failure and no partial artifacts.
-10. Network blocked -> all fixture-based tests pass.
+8. API with missing snapshot -> not implemented.
+9. Malformed JSONL, invalid UTF-8, and an oversized absolute Silver path -> bounded failure and no published generation.
+10. Fixture tests do not call a network API. A separate network-blocked run was not executed.
+
+On Windows, creating a file or directory symlink was not permitted, so those transform and ingest cases were skipped. A directory junction on the Silver generation parent was rejected. On WSL2 those symlink cases ran, and the junction cases were skipped. The Windows path-length refusal and the Linux `renameat2(RENAME_NOREPLACE)` behavior were each executed on their own platform. Directory fsync is still not evidence of durability across power loss.
 
 Bronze file failures are separate from row validation. An oversized, unreadable, or unstable input fails before publication and leaves any previous artifact intact. A file whose rows violate the trip contract remains valid Bronze when its bytes are stored unchanged.
 

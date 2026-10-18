@@ -1,0 +1,71 @@
+{
+  "additionalProperties": false,
+  "contract_version": "1.0.0",
+  "distance_scale": 3,
+  "distance_unit": "km",
+  "properties": {
+    "trip_id": {
+      "description": "Non-blank identifier. A value made only of spaces is rejected. Any other character, including surrounding spaces, is preserved.",
+      "title": "Trip Id",
+      "type": "string"
+    },
+    "pickup_at": {
+      "description": "Timezone-aware pickup instant, stored in UTC.",
+      "format": "date-time",
+      "title": "Pickup At",
+      "type": "string"
+    },
+    "dropoff_at": {
+      "description": "Timezone-aware dropoff instant, stored in UTC. An earlier instant is rejected.",
+      "format": "date-time",
+      "title": "Dropoff At",
+      "type": "string"
+    },
+    "trip_distance": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "description": "Kilometers as an integer, Decimal, or canonical decimal string. The supplied fractional scale must be 3 or less. A finer literal is rejected and is not rounded.",
+      "title": "Trip Distance"
+    },
+    "source_zone": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional zone identifier.",
+      "title": "Source Zone"
+    },
+    "destination_zone": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Optional zone identifier.",
+      "title": "Destination Zone"
+    }
+  },
+  "required": [
+    "trip_id",
+    "pickup_at",
+    "dropoff_at",
+    "trip_distance"
+  ],
+  "title": "trip_record",
+  "type": "object"
+}

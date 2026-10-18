@@ -11,12 +11,13 @@ Python package `cfi` `0.1.0a0`.
 Present in the tree:
 
 - INC-001: Python 3.12 toolchain with uv, Ruff, mypy, and pytest.
-- INC-002: `trip_record` v1 and synthetic fixtures.
+- INC-002: frozen `trip_record` v1.0.0 and synthetic fixtures.
 - INC-003: local Bronze ingestion, manifest v1, and `cfi ingest`.
+- INC-004: `trip_record` v1.1.0, Bronze to Silver transformation, quarantine, and `cfi transform`.
 
-Silver, Gold, the read API, container images, and cloud resources are not implemented. This is not a production platform.
+Gold, the read API, container images, and cloud resources are not implemented. This is not a production platform.
 
-INC-003 was exercised on Windows 10.0.26200 with Python 3.12.15, and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3) using the versions pinned in `uv.lock`. The Docker engine was not running, so there is no container evidence. Details and limits are in the vertical slice.
+INC-003 and INC-004 were exercised on Windows 10.0.26200 with Python 3.12.15, and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3) using the versions pinned in `uv.lock`. DuckDB 1.5.6 wrote the Parquet files. The Docker engine was not running, so there is no container evidence. Details and limits are in the vertical slice.
 
 ## Bronze ingest
 
@@ -26,9 +27,17 @@ cfi ingest --input <path> --source-id <id> --dataset-version <version> --run-id 
 
 `CFI_DATA_ROOT` defaults to `data`, which is gitignored. `CFI_MAX_INPUT_BYTES` defaults to 10 MiB. `CFI_LOCK_TIMEOUT_SECONDS` defaults to 30 seconds.
 
+## Silver transform
+
+```text
+cfi transform --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]
+```
+
+The command reads one published Bronze directory. It does not take a file path and it does not modify Bronze. `contract_version` is `1.1.0` and `transform_version` is `1`; neither is a flag. `--dry-run` returns counts and the decision without creating a directory, lock, temporary file, or persistent log.
+
 ## Toolchain
 
-The project targets Python 3.12 through uv. uv keeps that interpreter in its own cache and does not replace the system Python. Direct dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. The runtime dependency is Pydantic v2.
+The project targets Python 3.12 through uv. uv keeps that interpreter in its own cache and does not replace the system Python. Direct dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. The runtime dependencies are Pydantic v2 and DuckDB. Pandas and PyArrow are not direct dependencies.
 
 Configured checks:
 

@@ -1,0 +1,54 @@
+{
+  "columns": [
+    {
+      "logical_type": "utf8",
+      "name": "source_id"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "dataset_version"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "input_sha256"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "contract_version"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "transform_version"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "bronze_run_id"
+    },
+    {
+      "logical_type": "int64",
+      "name": "line_number"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "line_sha256"
+    },
+    {
+      "logical_type": "int64",
+      "name": "line_size_bytes"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "failure_class"
+    },
+    {
+      "logical_type": "utf8_list",
+      "name": "reason_codes"
+    },
+    {
+      "logical_type": "utf8_nullable",
+      "name": "trip_id"
+    }
+  ],
+  "contract_name": "quarantine_record",
+  "contract_version": "1"
+}

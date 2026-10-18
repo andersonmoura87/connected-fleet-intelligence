@@ -1,4 +1,4 @@
-"""Failures reported by Bronze ingestion."""
+"""Failures reported by local cfi commands."""
 
 
 class IngestFailure(Exception):

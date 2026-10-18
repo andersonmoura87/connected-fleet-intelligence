@@ -5,6 +5,7 @@ description = "Reference platform for fleet data intelligence."
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "duckdb>=1.1,<2",
     "pydantic>=2.10,<3",
 ]
 

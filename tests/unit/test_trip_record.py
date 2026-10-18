@@ -61,6 +61,29 @@ def test_blank_and_preserved_trip_id() -> None:
     assert _accepted(trip_id=" trip-001 ").trip_id == " trip-001 "
 
 
+def test_fractional_timestamp_precision_is_strict() -> None:
+    kept = _accepted(pickup_at="2024-06-01T12:00:00.123456Z")
+    padded = _accepted(pickup_at="2024-06-01T12:00:00.1Z")
+    offset = _accepted(
+        pickup_at="2024-06-01T07:00:00.123456-05:00",
+        dropoff_at="2024-06-01T12:00:00.123456Z",
+    )
+
+    assert kept.pickup_at.microsecond == 123456
+    assert padded.pickup_at.microsecond == 100000
+    assert offset.pickup_at == datetime(2024, 6, 1, 12, 0, 0, 123456, tzinfo=UTC)
+    assert offset.dropoff_at == offset.pickup_at
+    assert _rejected(pickup_at="2024-06-01T12:00:00.1234560Z").reasons == (
+        ReasonCode.TIMESTAMP_PRECISION_EXCEEDED,
+    )
+    assert _rejected(pickup_at="2024-06-01T12:00:00.1234561Z").reasons == (
+        ReasonCode.TIMESTAMP_PRECISION_EXCEEDED,
+    )
+    assert _rejected(
+        dropoff_at="2024-06-01T11:00:00.1234560Z",
+    ).reasons == (ReasonCode.TIMESTAMP_PRECISION_EXCEEDED,)
+
+
 def test_timestamp_failures() -> None:
     assert _rejected(pickup_at="not-a-timestamp").reasons == (ReasonCode.INVALID_TIMESTAMP,)
     assert _rejected(pickup_at="2024-06-01T12:00:00").reasons == (

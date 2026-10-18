@@ -1,4 +1,4 @@
-"""Executable trip_record contract, version 1.0.0.
+"""Executable trip_record contract, version 1.1.0.
 
 The model validates one row. It does not ingest files, detect duplicates,
 or compute fleet aggregates.
@@ -16,10 +16,11 @@ from pydantic_core import ErrorDetails
 from cfi.domain.reasons import ReasonCode
 
 CONTRACT_NAME = "trip_record"
-CONTRACT_VERSION = "1.0.0"
+CONTRACT_VERSION = "1.1.0"
 DISTANCE_UNIT = "km"
 DISTANCE_SCALE = 3
 
+_EXCESS_FRACTION = re.compile(r"\.\d{7,}")
 _NONFINITE_TOKENS = frozenset({"NaN", "Infinity", "-Infinity"})
 _NONNEGATIVE_LITERAL = re.compile(r"^(0|[1-9]\d*)(\.\d+)?$")
 _NEGATIVE_LITERAL = re.compile(r"^-(0|[1-9]\d*)(\.\d+)?$")
@@ -148,7 +149,11 @@ class TripRecord(BaseModel):
     @field_validator("pickup_at", "dropoff_at", mode="before")
     @classmethod
     def _timestamp_input(cls, value: object) -> object:
-        if isinstance(value, datetime | str):
+        if isinstance(value, str):
+            if _EXCESS_FRACTION.search(value):
+                raise _ContractError(ReasonCode.TIMESTAMP_PRECISION_EXCEEDED)
+            return value
+        if isinstance(value, datetime):
             return value
         raise _ContractError(ReasonCode.SCHEMA_VIOLATION)
 

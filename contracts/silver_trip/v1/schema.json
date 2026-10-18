@@ -1,0 +1,62 @@
+{
+  "columns": [
+    {
+      "logical_type": "utf8",
+      "name": "trip_id"
+    },
+    {
+      "logical_type": "timestamp_utc_us",
+      "name": "pickup_at"
+    },
+    {
+      "logical_type": "timestamp_utc_us",
+      "name": "dropoff_at"
+    },
+    {
+      "logical_type": "decimal(18,3)",
+      "name": "trip_distance"
+    },
+    {
+      "logical_type": "utf8_nullable",
+      "name": "source_zone"
+    },
+    {
+      "logical_type": "utf8_nullable",
+      "name": "destination_zone"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "source_id"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "dataset_version"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "input_sha256"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "contract_version"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "transform_version"
+    },
+    {
+      "logical_type": "utf8",
+      "name": "bronze_run_id"
+    },
+    {
+      "logical_type": "int64",
+      "name": "line_number"
+    },
+    {
+      "logical_type": "int64",
+      "name": "duplicate_count"
+    }
+  ],
+  "contract_name": "silver_trip",
+  "contract_version": "1"
+}

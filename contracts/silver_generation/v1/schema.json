@@ -1,0 +1,193 @@
+{
+  "$defs": {
+    "ColumnSpec": {
+      "additionalProperties": false,
+      "properties": {
+        "logical_type": {
+          "title": "Logical Type",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "logical_type"
+      ],
+      "title": "ColumnSpec",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "contract_name": "silver_generation",
+  "contract_version": "1",
+  "description": "Seal for one Silver generation directory.",
+  "properties": {
+    "bronze_run_id": {
+      "title": "Bronze Run Id",
+      "type": "string"
+    },
+    "conflict_rejection_count": {
+      "minimum": 0,
+      "title": "Conflict Rejection Count",
+      "type": "integer"
+    },
+    "contract_name": {
+      "title": "Contract Name",
+      "type": "string"
+    },
+    "contract_version": {
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "created_at": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dataset_version": {
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "identical_duplicate_extra_count": {
+      "minimum": 0,
+      "title": "Identical Duplicate Extra Count",
+      "type": "integer"
+    },
+    "input_line_count": {
+      "minimum": 0,
+      "title": "Input Line Count",
+      "type": "integer"
+    },
+    "input_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "invalid_record_count": {
+      "minimum": 0,
+      "title": "Invalid Record Count",
+      "type": "integer"
+    },
+    "manifest_version": {
+      "title": "Manifest Version",
+      "type": "string"
+    },
+    "parquet_compression": {
+      "title": "Parquet Compression",
+      "type": "string"
+    },
+    "parquet_writer": {
+      "title": "Parquet Writer",
+      "type": "string"
+    },
+    "parquet_writer_version": {
+      "title": "Parquet Writer Version",
+      "type": "string"
+    },
+    "quarantine_row_count": {
+      "minimum": 0,
+      "title": "Quarantine Row Count",
+      "type": "integer"
+    },
+    "quarantine_schema": {
+      "items": {
+        "$ref": "#/$defs/ColumnSpec"
+      },
+      "title": "Quarantine Schema",
+      "type": "array"
+    },
+    "quarantine_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Quarantine Sha256",
+      "type": "string"
+    },
+    "quarantine_size_bytes": {
+      "minimum": 0,
+      "title": "Quarantine Size Bytes",
+      "type": "integer"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "silver_record_count": {
+      "minimum": 0,
+      "title": "Silver Record Count",
+      "type": "integer"
+    },
+    "silver_schema": {
+      "items": {
+        "$ref": "#/$defs/ColumnSpec"
+      },
+      "title": "Silver Schema",
+      "type": "array"
+    },
+    "silver_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Silver Sha256",
+      "type": "string"
+    },
+    "silver_size_bytes": {
+      "minimum": 0,
+      "title": "Silver Size Bytes",
+      "type": "integer"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "storage_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Storage Key",
+      "type": "string"
+    },
+    "transform_version": {
+      "title": "Transform Version",
+      "type": "string"
+    },
+    "valid_record_count": {
+      "minimum": 0,
+      "title": "Valid Record Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "manifest_version",
+    "source_id",
+    "dataset_version",
+    "input_sha256",
+    "contract_name",
+    "contract_version",
+    "transform_version",
+    "storage_key",
+    "bronze_run_id",
+    "run_id",
+    "created_at",
+    "status",
+    "silver_sha256",
+    "silver_size_bytes",
+    "quarantine_sha256",
+    "quarantine_size_bytes",
+    "silver_schema",
+    "quarantine_schema",
+    "parquet_writer",
+    "parquet_writer_version",
+    "parquet_compression",
+    "input_line_count",
+    "valid_record_count",
+    "invalid_record_count",
+    "silver_record_count",
+    "identical_duplicate_extra_count",
+    "conflict_rejection_count",
+    "quarantine_row_count"
+  ],
+  "title": "silver_generation",
+  "type": "object"
+}

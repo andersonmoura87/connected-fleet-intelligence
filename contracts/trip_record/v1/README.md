@@ -1,8 +1,10 @@
-# trip_record v1
+# trip_record v1.0.0 snapshot
 
-Status: executable contract. Schema file `schema.json` is generated from `TripRecord.model_json_schema()` and must match that export.
+Status: frozen historical copy of contract_version `1.0.0`. The file `schema.json` in this directory is not regenerated. The same bytes are stored at `../v1.0.0/schema.json`.
 
-`contract_version` is `1.0.0`. The distance unit is kilometers. This row contract does not include batch provenance (`source_id`, `dataset_version`, `input_sha256`, `run_id`). Those values belong to a later manifest. Placing them on the row is a schema violation.
+The executable contract is [trip_record v1.1.0](../v1.1.0/README.md). Silver transformation uses `contract_version` `1.1.0`.
+
+`contract_version` of this snapshot is `1.0.0`. The distance unit is kilometers. This row contract does not include batch provenance (`source_id`, `dataset_version`, `input_sha256`, `run_id`). Those values belong to a later manifest. Placing them on the row is a schema violation.
 
 These fixtures are synthetic. They are not a NYC TLC sample and they are not observed fleet telemetry.
 
@@ -92,4 +94,4 @@ Specified for Silver. Not implemented in this contract.
 
 `tests/fixtures/synthetic/trips_invalid.jsonl` holds one defect per line: blank id, whitespace id, unparseable timestamp, missing timezone, end before start, UTC order reversal, negative distance, `NaN`, `Infinity`, `-Infinity`, four fractional digits, an unknown field, a missing `trip_id`, and a boolean distance.
 
-`tests/fixtures/synthetic/trips_conflict.jsonl` holds two identical `trip-100` rows and two conflicting `trip-200` rows. Under the policy above, and only as a specified outcome, Silver would keep one logical trip of 1.000 km and 600 seconds, and would reject both `trip-200` rows. Swapping the conflicting lines does not change that outcome. This repository does not yet perform that reduction.
+`tests/fixtures/synthetic/trips_conflict.jsonl` holds two identical `trip-100` rows and two conflicting `trip-200` rows. Under the policy above, Silver keeps one logical trip of 1.000 km and 600 seconds, and rejects both `trip-200` rows. Swapping the conflicting lines does not change that outcome.

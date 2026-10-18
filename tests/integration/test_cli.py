@@ -53,3 +53,53 @@ def test_cli_dry_run_prints_json_without_directories(
     assert payload["dry_run"] is True
     assert payload["status"] == "published"
     assert not (tmp_path / "data").exists()
+
+
+def test_cli_transform_publishes_and_replays(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("CFI_DATA_ROOT", str(tmp_path / "data"))
+    source = tmp_path / "input.bin"
+    source.write_bytes(b"")
+    ingest_args = [
+        "ingest",
+        "--input",
+        str(source),
+        "--source-id",
+        "synthetic.trips.v1",
+        "--dataset-version",
+        "v1",
+        "--run-id",
+        "bronze-001",
+    ]
+    transform_args = [
+        "transform",
+        "--source-id",
+        "synthetic.trips.v1",
+        "--dataset-version",
+        "v1",
+        "--run-id",
+        "silver-001",
+    ]
+
+    assert main(ingest_args) == 0
+    capsys.readouterr()
+    assert main([*transform_args, "--dry-run"]) == 0
+    dry = json.loads(capsys.readouterr().out)
+    assert dry["dry_run"] is True
+    assert dry["status"] == "published"
+    assert dry["contract_version"] == "1.1.0"
+    assert not (tmp_path / "data" / "silver").exists()
+    assert main(transform_args) == 0
+    published = json.loads(capsys.readouterr().out)
+    assert published["status"] == "published"
+    assert published["input_line_count"] == 0
+    assert main(transform_args[:-1] + ["silver-002"]) == 0
+    replay = json.loads(capsys.readouterr().out)
+    assert replay["status"] == "noop"
+    assert (
+        main(["transform", "--source-id", "../bad", "--dataset-version", "v1", "--run-id", "x"])
+        == 2
+    )

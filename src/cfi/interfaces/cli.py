@@ -1,4 +1,4 @@
-"""Command line for Bronze ingestion."""
+"""Command line for Bronze ingestion and Silver transformation."""
 
 import argparse
 import json
@@ -15,6 +15,7 @@ from cfi.application.ingest import (
     IngestSettings,
     ingest,
 )
+from cfi.application.transform import TransformRequest, TransformSettings, transform
 
 
 class _Parser(argparse.ArgumentParser):
@@ -33,31 +34,51 @@ def main(argv: list[str] | None = None) -> int:
     ingest_parser.add_argument("--dataset-version", required=True)
     ingest_parser.add_argument("--run-id", required=True)
     ingest_parser.add_argument("--dry-run", action="store_true")
+    transform_parser = subcommands.add_parser("transform")
+    transform_parser.add_argument("--source-id", required=True)
+    transform_parser.add_argument("--dataset-version", required=True)
+    transform_parser.add_argument("--run-id", required=True)
+    transform_parser.add_argument("--dry-run", action="store_true")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         code = exc.code
         return 2 if code is None else int(code)
 
-    if args.command != "ingest":
+    if args.command not in {"ingest", "transform"}:
         _emit_error("usage", 2, dry_run=False)
         return 2
     try:
         settings = _settings_from_env()
-        result = ingest(
-            settings,
-            IngestRequest(
-                input_path=Path(args.input),
-                source_id=args.source_id,
-                dataset_version=args.dataset_version,
-                run_id=args.run_id,
-                dry_run=bool(args.dry_run),
-            ),
-        )
+        if args.command == "transform":
+            payload = transform(
+                TransformSettings(
+                    data_root=settings.data_root,
+                    max_input_bytes=settings.max_input_bytes,
+                    lock_timeout_seconds=settings.lock_timeout_seconds,
+                ),
+                TransformRequest(
+                    source_id=args.source_id,
+                    dataset_version=args.dataset_version,
+                    run_id=args.run_id,
+                    dry_run=bool(args.dry_run),
+                ),
+            ).as_dict()
+        else:
+            payload = ingest(
+                settings,
+                IngestRequest(
+                    input_path=Path(args.input),
+                    source_id=args.source_id,
+                    dataset_version=args.dataset_version,
+                    run_id=args.run_id,
+                    dry_run=bool(args.dry_run),
+                ),
+            ).as_dict()
     except IngestFailure as exc:
         _emit_error(exc.code, exc.exit_code, dry_run=bool(args.dry_run))
         return exc.exit_code
-    sys.stdout.write(json.dumps(result.as_dict(), sort_keys=True) + "\n")
+    sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
     return 0
 
 

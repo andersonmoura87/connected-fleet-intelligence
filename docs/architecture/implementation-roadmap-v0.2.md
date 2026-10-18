@@ -12,14 +12,14 @@ Indicative 16-week delivery sequence, assuming approximately 8 hours/week. Re-pl
 
 ## Vertical Slice 001 increment sequence
 
-Phase 1 builds the local reference in this order. INC-001, INC-002, and INC-003 are present in the repository. INC-004 and later rows are specified and not implemented.
+Phase 1 builds the local reference in this order. INC-001, INC-002, INC-003, and INC-004 are present in the repository. INC-005 and later rows are specified and not implemented.
 
 | Increment | Scope | Notes |
 |---|---|---|
 | INC-001 | Python foundation and quality tooling | Python 3.12, uv, Ruff, mypy, pytest. No data dependencies. |
 | INC-002 | Data contracts and deterministic fixtures | Canonical internal contract and synthetic fixture only. |
 | INC-003 | Bronze ingestion | Implemented. Immutable original bytes, checksum, replay, and an OS-held lock per source identity. Publication renames a complete directory onto an absent final path. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
-| INC-004 | Silver transformation and quarantine | DuckDB is introduced here as the Parquet engine for Silver and quarantine. |
+| INC-004 | Silver transformation and quarantine | Implemented. DuckDB 1.5.6 writes Silver and quarantine Parquet. Generation identity includes trip_record `1.1.0` and transform version `1`. Replay of an equal generation is a no-op. A divergent generation is a conflict and is not replaced. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
 | INC-005 | Gold operational metrics | Reuses the DuckDB engine from INC-004. Adds the Gold snapshot pointer and the exclusive lock for that pointer. |
 | INC-006 | FastAPI read endpoints | Reads the published snapshot. DuckDB stays off the request path. |
 | INC-007 | Integration, failure, and reproducibility tests | Includes contended publication. The container image follows this increment and is not part of its definition of done. |
@@ -38,7 +38,7 @@ Bronze becomes visible when a complete temporary directory is renamed onto a fin
 
 ### DuckDB
 
-DuckDB enters in INC-004, when the first Parquet artifacts are written. INC-005 uses that same engine for Gold aggregates and does not add a second analytical library. The read API does not query DuckDB.
+DuckDB entered in INC-004. The pinned version is 1.5.6. It writes ZSTD Parquet from an in-memory connection that is closed before publication. `DECIMAL(18,3)` and `TIMESTAMP` at microsecond resolution were read back in the local tests. `TIMESTAMP WITH TIME ZONE` is not used. INC-005 is specified to reuse this engine for Gold aggregates and is not implemented. The read API is not implemented and is not specified to query DuckDB.
 
 ## Verification loop
 

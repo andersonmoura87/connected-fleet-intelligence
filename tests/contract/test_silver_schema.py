@@ -23,6 +23,10 @@ def test_silver_and_quarantine_columns_match_code() -> None:
     assert _columns(QUARANTINE_SCHEMA) == QUARANTINE_COLUMNS
     assert silver["contract_name"] == "silver_trip"
     assert silver["contract_version"] == "1"
+    assert "normalized to UTC before persistence" in silver["description"]
+    assert "TIMESTAMP with microsecond precision and no time zone" in silver["description"]
+    assert "Consumers must interpret those components as UTC" in silver["description"]
+    assert "TIMESTAMP WITH TIME ZONE is not the physical type" in silver["description"]
     assert quarantine["contract_name"] == "quarantine_record"
     assert "payload" not in quarantine
 

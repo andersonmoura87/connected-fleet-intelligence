@@ -58,5 +58,6 @@
     }
   ],
   "contract_name": "silver_trip",
-  "contract_version": "1"
+  "contract_version": "1",
+  "description": "pickup_at and dropoff_at use logical type timestamp_utc_us. They are normalized to UTC before persistence. The Parquet physical type is TIMESTAMP with microsecond precision and no time zone. Consumers must interpret those components as UTC. TIMESTAMP WITH TIME ZONE is not the physical type."
 }

@@ -38,7 +38,7 @@ Bronze becomes visible when a complete temporary directory is renamed onto a fin
 
 ### DuckDB
 
-DuckDB entered in INC-004. The pinned version is 1.5.6. It writes ZSTD Parquet from an in-memory connection that is closed before publication. `DECIMAL(18,3)` and `TIMESTAMP` at microsecond resolution were read back in the local tests. `TIMESTAMP WITH TIME ZONE` is not used. INC-005 is specified to reuse this engine for Gold aggregates and is not implemented. The read API is not implemented and is not specified to query DuckDB.
+DuckDB entered in INC-004. The pinned version is 1.5.6. It writes ZSTD Parquet from an in-memory connection that is closed before publication. `DECIMAL(18,3)` and timezone-naive `TIMESTAMP` values at microsecond resolution were read back in the local tests. Those components are UTC. `TIMESTAMP WITH TIME ZONE` is not used. INC-005 is specified to reuse this engine for Gold aggregates and is not implemented. The read API is not implemented and is not specified to query DuckDB.
 
 ## Verification loop
 

@@ -1,0 +1,90 @@
+{
+  "additionalProperties": false,
+  "contract_name": "gold_summary",
+  "contract_version": "1",
+  "description": "Logical Gold metrics. This document has no clock and no run id.",
+  "properties": {
+    "aggregate_version": {
+      "title": "Aggregate Version",
+      "type": "string"
+    },
+    "average_duration_seconds": {
+      "anyOf": [
+        {
+          "pattern": "^-?\\d+(\\.\\d+)?$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Average Duration Seconds"
+    },
+    "contract_version": {
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "dataset_version": {
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "gold_contract_version": {
+      "title": "Gold Contract Version",
+      "type": "string"
+    },
+    "input_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "rejected_count": {
+      "minimum": 0,
+      "title": "Rejected Count",
+      "type": "integer"
+    },
+    "silver_storage_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Silver Storage Key",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "summary_version": {
+      "title": "Summary Version",
+      "type": "string"
+    },
+    "total_distance_km": {
+      "pattern": "^-?\\d+(\\.\\d+)?$",
+      "title": "Total Distance Km",
+      "type": "string"
+    },
+    "transform_version": {
+      "title": "Transform Version",
+      "type": "string"
+    },
+    "trip_count": {
+      "minimum": 0,
+      "title": "Trip Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "summary_version",
+    "source_id",
+    "dataset_version",
+    "input_sha256",
+    "contract_version",
+    "transform_version",
+    "silver_storage_key",
+    "gold_contract_version",
+    "aggregate_version",
+    "trip_count",
+    "total_distance_km",
+    "average_duration_seconds",
+    "rejected_count"
+  ],
+  "title": "gold_summary",
+  "type": "object"
+}

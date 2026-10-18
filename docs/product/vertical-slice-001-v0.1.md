@@ -1,6 +1,6 @@
 # Vertical Slice 001 v0.1 — Public Trips to Read-only Metrics
 
-Status: Bronze ingestion and Silver transformation are implemented. Both were exercised on Windows 10.0.26200 (Python 3.12.15) and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3, dependencies from `uv.lock`, DuckDB 1.5.6). Gold and the API are not implemented. These runs are local evidence, not a production certification. The Docker engine was not running.
+Status: Bronze ingestion, Silver transformation, and Gold publication are implemented. All three were exercised on Windows 10.0.26200 (Python 3.12.15) and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3, dependencies from `uv.lock`, DuckDB 1.5.6). The API is not implemented. These runs are local evidence, not a production certification. The Docker engine was not running.
 
 ## Goal
 From a small pinned synthetic trip fixture, validate records, publish immutable Bronze and typed Silver, compute a Gold summary, and serve it through a read-only FastAPI endpoint. A licensed public sample is a later, separate input. No network access is required for tests or dry run.
@@ -15,12 +15,13 @@ Implemented:
 
 - `cfi ingest --input <path> --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]`
 - `cfi transform --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]`
+- `cfi gold --source-id <id> --dataset-version <version> --input-sha256 <sha256> --run-id <id> [--dry-run] [--promote]`
 
 Still proposed, and not implemented:
 
 - `cfi serve --host 127.0.0.1 --port 8000`
 
-`--dataset-version` is required. It has no default. `--dry-run` evaluates the decision and creates no directory, lock, temporary file, or persistent log. Stdout is one JSON object. Transform does not accept `contract_version` or `transform_version` as flags. Those values come from the code: `1.1.0` and `1`.
+`--dataset-version` is required. It has no default. `--dry-run` evaluates the decision and creates no directory, lock, temporary file, or persistent log. Stdout is one JSON object. Transform does not accept `contract_version` or `transform_version` as flags. Those values come from the code: `1.1.0` and `1`. Gold does not accept them either, and it does not accept `silver_storage_key`. The caller passes `input_sha256`. Gold derives the Silver directory from that checksum and the versions in code. It does not open Bronze.
 
 Exit codes for `cfi ingest` and `cfi transform`:
 
@@ -32,6 +33,18 @@ Exit codes for `cfi ingest` and `cfi transform`:
 | 4 | storage failure, cross-device rename, reparse point, path escape, path length, or Parquet round-trip failure |
 | 5 | lock unavailable |
 
+Exit codes for `cfi gold`:
+
+| Code | Meaning |
+|---|---|
+| 0 | snapshot published or already current, including an explicit promotion |
+| 2 | usage, invalid identifier, or invalid SHA-256 |
+| 3 | Silver absent or invalid, snapshot conflict, publication conflict, or a pointer that is corrupt, missing its snapshot, or hash-mismatched |
+| 4 | storage failure, cross-device replace, reparse point, path escape, or path length |
+| 5 | snapshot lock or pointer lock unavailable |
+
+A Gold result names `snapshot_state` and `pointer_state` separately. `snapshot_durable` is true only when this command observed the final snapshot directory and its schema, hash, size, and metrics checked out. `pointer_replaced` is true only after `os.replace` returns in that process. If the snapshot phase has finished and the pointer lock or the pointer replace then fails, the status is `partial`: the snapshot is not described as absent and it is not deleted. A snapshot-lock timeout reports an already valid snapshot as `snapshot_noop` or `snapshot_conflict` with `snapshot_durable` true. It does not publish and it does not change the pointer. `--promote` does not change a pointer that fails validation. An injected exception after `os.replace` is not turned into a success result.
+
 ## Minimal data contract
 Required: trip_id (nonblank string), pickup_at (timezone-aware ISO8601, at most six fractional digits), dropoff_at (same timestamp rule), trip_distance (finite number >= 0, fractional scale at most 3). Optional: source_zone, destination_zone. Provenance: source_id, dataset_version, input_sha256, run_id. Reject end before start, nonfinite numbers, duplicate conflicting trip IDs, invalid timestamps, and timestamp literals with more than six fractional digits. The executable row contract is `1.1.0`. Real public dataset field mapping must be versioned and documented; this is a canonical internal contract, not a claim about NYC TLC columns.
 
@@ -40,20 +53,22 @@ Required: trip_id (nonblank string), pickup_at (timezone-aware ISO8601, at most 
 
 `run_id` records the execution that created the artifact. Another `run_id` does not fork storage identity. Replay of the same bytes is a no-op and does not rewrite the bytes, the manifest, or `created_at`. A different checksum for the same `source_identity` fails closed and writes nothing. A new `dataset_version` is a new artifact even when the bytes match. The same bytes under another `source_id` are another artifact.
 
-Silver logical identity is `(source_id, dataset_version, input_sha256, contract_version, transform_version)`. The current transform uses trip_record `1.1.0` and transform version `1`. The directory name is the SHA-256 of those fields, not the fields themselves. `run_id` is the creator recorded in the manifest and is not a path segment. Gold identity is not implemented.
+Silver logical identity is `(source_id, dataset_version, input_sha256, contract_version, transform_version)`. The current transform uses trip_record `1.1.0` and transform version `1`. The directory name is the SHA-256 of those fields, not the fields themselves. `run_id` is the creator recorded in the manifest and is not a path segment.
+
+Gold snapshot identity adds `gold_contract_version` `1` and `aggregate_version` `1`. `run_id`, `created_at`, the absolute path, and the DuckDB version are lineage, not identity. The pointer identity is only `(source_id, dataset_version)`.
 
 Bronze stores the original bytes, including rows that fail trip validation. Ingestion does not accept or reject trips.
 
 ## Concurrency
-Bronze and Silver use separate locks. The Gold pointer lock is specified and not implemented.
+Bronze, Silver, and Gold use separate locks. The Gold snapshot lock is released before the Gold pointer lock is acquired.
 
 INC-003 holds an OS-level exclusive lock for one `source_identity`. The operating system releases that lock when the holding process exits, including abrupt termination. Acquisition waits up to `CFI_LOCK_TIMEOUT_SECONDS`, initially 30 seconds. A waiter does not take over a lock because of its age. After acquisition, the process reads the source state again and only then publishes, replays, or fails closed. Linux uses `fcntl.flock`. Windows uses `msvcrt.locking`. Both come from the Python standard library. The lock excludes other processes that use it. Threads in one process, and programs that ignore the lock, are outside that guarantee. The marker file is not deleted on release or after a crash.
 
 Process tests for abrupt exit, timeout, and two concurrent publishers passed on Windows and on the WSL2 ext4 run. `fcntl.flock` was executed only in that Linux run. `msvcrt.locking` was executed only on Windows.
 
-INC-004 holds a separate OS-level lock at `silver/locks/{storage_key}.lock`. It uses the same lock primitive and the same timeout. It is not the Bronze marker and it is not a Gold pointer lock. Transform does not take the Bronze lock. A Gold snapshot pointer is not implemented.
+INC-004 holds a separate OS-level lock at `silver/locks/{storage_key}.lock`. It uses the same lock primitive and the same timeout. It is not the Bronze marker and it is not a Gold pointer lock. Transform does not take the Bronze lock.
 
-INC-005 remains specified and not implemented. It would hold a separate exclusive lock around replacement of the Gold snapshot pointer. That lock is not the Bronze source lock and it is not the Silver generation lock.
+INC-005 holds `gold/locks/{storage_key}.lock` while publishing one snapshot, then releases it. It holds `gold/locks/pointer-{pointer_key}.lock` while reading and replacing `current.json`. Those locks are not the Bronze lock and not the Silver lock. Two explicit promotions are serialized by the pointer lock. The last one to pass revalidation sets the target. `created_at` and `run_id` are not a business order.
 
 ## Publication and durability
 Bronze publication renames a complete temporary directory onto a final path that does not already exist. The temporary directory already contains the original bytes and the manifest, both flushed and fsynced. The rename does not replace an existing published directory, including an empty one. If the final path exists, the rename fails and the published artifact stays in place.
@@ -116,6 +131,32 @@ Counts on every success satisfy `input_line_count = valid_record_count + invalid
 
 Contracts: `contracts/trip_record/v1.1.0/`, `contracts/silver_trip/v1/`, `contracts/quarantine_record/v1/`, and `contracts/silver_generation/v1/`. The v1.0.0 trip schema remains frozen.
 
+## Gold publication
+
+```text
+{CFI_DATA_ROOT}/gold/snapshots/{storage_key}/summary.json
+{CFI_DATA_ROOT}/gold/snapshots/{storage_key}/manifest.json
+{CFI_DATA_ROOT}/gold/locks/{storage_key}.lock
+{CFI_DATA_ROOT}/gold/.incoming/{token}/
+{CFI_DATA_ROOT}/gold/published/{pointer_key}/current.json
+{CFI_DATA_ROOT}/gold/published/{pointer_key}/.incoming/{token}.json
+{CFI_DATA_ROOT}/gold/locks/pointer-{pointer_key}.lock
+```
+
+`storage_key` is the SHA-256 of eight UTF-8 lines, each ending in newline: `cfi-gold-snapshot-v1`, `source_id`, `dataset_version`, `input_sha256`, `contract_version`, `transform_version`, `gold_contract_version`, `aggregate_version`. `pointer_key` is the SHA-256 of three UTF-8 lines: `cfi-gold-pointer-v1`, `source_id`, `dataset_version`. The same 240-character absolute-path budget is checked before any Gold write.
+
+Gold reads one published Silver generation. It checks the manifest, both Parquet hashes and sizes, the physical schemas, the reconciled counts, the contract and transform versions, and the UTC timestamp convention. Quarantine Parquet is read for that seal and its row count. Its payloads are not aggregated. Bronze is not opened.
+
+DuckDB 1.5.6 is the Parquet reader. Distance is summed in a local decimal context of precision 40. The average converts each duration to integer microseconds, divides with half-even rounding, and formats six fractional digits. It does not use `timedelta.total_seconds()` and it does not use the process-wide decimal precision. An empty Silver generation has `trip_count` 0, `total_distance_km` `0.000`, and `average_duration_seconds` null.
+
+`summary.json` is canonical JSON: UTF-8, sorted keys, two-space indent, trailing newline. Decimals are strings. Null is JSON null. The summary has no clock and no run id, so a replay can match it. `manifest.json` repeats the metrics and records `summary_sha256`, `created_at`, `run_id`, `bronze_run_id`, and the DuckDB reader version. The reader version does not change the storage key and does not authorize a rewrite.
+
+The snapshot directory is published by the same exclusive rename used for Silver. An equal snapshot is `snapshot_noop` and is not rewritten. A logically different sealed snapshot is `snapshot_conflict` and is not replaced. An incomplete snapshot, or a manifest whose hash does not match `summary.json`, is left in place and is not repaired.
+
+`current.json` is replaced with `os.replace` of one file on the same volume. Directory publication does not use `os.replace`. Readers that open the pointer, read all bytes, and close it see either the previous JSON or the new JSON. This is not a power-loss guarantee. On Windows, a reader that holds the file open without share-delete can make the replace fail. The previous pointer then stays in place, the snapshot remains, and the command exits 4.
+
+Contracts: `contracts/gold_summary/v1/`, `contracts/gold_generation/v1/`, and `contracts/gold_pointer/v1/`.
+
 ## Recovery
 
 A failure before the rename removes that execution's temporary directory when the process reaches cleanup. If the process is killed first, the unpublished temporary directory can remain under `.incoming`. A later ingest does not publish it and does not delete it.
@@ -129,8 +170,9 @@ A crash after the rename can report an error while the directory is already visi
 - Bronze original bytes are immutable; identical replay is a no-op; the same source identity with a changed checksum fails closed.
 - A published Bronze directory is not silently replaced.
 - One Silver generation directory is renamed into place only when that path is absent. It contains both Parquet files and the manifest. Invalid rows are quarantined with reason and lineage, without the rejected payload.
-- Gold totals and the read API are not implemented.
-- Bronze ingests of one source identity are serialized by the OS lock. Silver publication of one generation identity uses its own lock.
+- One Gold snapshot is renamed into place only when that path is absent. The pointer is a separate file. `--promote` is required to move an intact pointer from one intact snapshot to another.
+- The read API is not implemented.
+- Bronze ingests of one source identity are serialized by the OS lock. Silver publication of one generation identity uses its own lock. Gold uses a snapshot lock and, after releasing it, a pointer lock.
 - No personal data or secrets in logs.
 
 ## API contract (proposed)
@@ -139,7 +181,7 @@ A crash after the rename can report an error while the directory is already visi
 `GET /v1/trips/summary` -> `{dataset_version, trip_count, total_distance, average_duration_seconds, rejected_count, generated_at}`; use a fixed or injected clock for deterministic tests.
 
 ## Failure scenarios and tests
-1. Valid two-trip fixture -> two Silver rows. Distance and instants were checked. Gold averages are not computed.
+1. Valid two-trip fixture -> two Silver rows and one Gold snapshot: `trip_count` 2, `total_distance_km` `12.750`, `average_duration_seconds` `1500.000000`, `rejected_count` 0. The invalid fixture publishes `trip_count` 0, `total_distance_km` `0.000`, a null average, and `rejected_count` 14. The conflict fixture publishes one trip, `1.000` km, average `600.000000`, and `rejected_count` 2. `duplicate_count` is not a weight.
 2. Invalid timestamp or negative distance -> one quarantine row per line, with the reason code.
 3. Conflicting duplicate ID -> every valid row of that `trip_id` is quarantined. The published generation is not replaced by a later conflicting recomputation.
 4. Interrupted write -> a crash before rename leaves no generation; a crash after rename leaves a generation that replays as `noop`.
@@ -150,7 +192,7 @@ A crash after the rename can report an error while the directory is already visi
 9. Malformed JSONL, invalid UTF-8, and an oversized absolute Silver path -> bounded failure and no published generation.
 10. Fixture tests do not call a network API. A separate network-blocked run was not executed.
 
-On Windows, creating a file or directory symlink was not permitted, so those transform and ingest cases were skipped. A directory junction on the Silver generation parent was rejected. On WSL2 those symlink cases ran, and the junction cases were skipped. The Windows path-length refusal and the Linux `renameat2(RENAME_NOREPLACE)` behavior were each executed on their own platform. Directory fsync is still not evidence of durability across power loss.
+On Windows, creating a file or directory symlink was not permitted, so those ingest, transform, and Gold cases were skipped. Directory junctions on the Silver generation parent and on the Gold snapshot parent were rejected. On WSL2 those symlink cases ran, and the junction cases were skipped. The Windows path-length refusal and the Linux `renameat2(RENAME_NOREPLACE)` behavior were each executed on their own platform. Directory fsync is still not evidence of durability across power loss. `os.replace` of the Gold pointer was executed on both platforms. It is not evidence of durability across power loss.
 
 Bronze file failures are separate from row validation. An oversized, unreadable, or unstable input fails before publication and leaves any previous artifact intact. A file whose rows violate the trip contract remains valid Bronze when its bytes are stored unchanged.
 

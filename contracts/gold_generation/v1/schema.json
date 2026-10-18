@@ -1,0 +1,145 @@
+{
+  "additionalProperties": false,
+  "contract_name": "gold_generation",
+  "contract_version": "1",
+  "description": "Seal for one immutable Gold snapshot directory.",
+  "properties": {
+    "aggregate_version": {
+      "title": "Aggregate Version",
+      "type": "string"
+    },
+    "average_duration_seconds": {
+      "anyOf": [
+        {
+          "pattern": "^-?\\d+(\\.\\d+)?$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Average Duration Seconds"
+    },
+    "bronze_run_id": {
+      "title": "Bronze Run Id",
+      "type": "string"
+    },
+    "contract_version": {
+      "title": "Contract Version",
+      "type": "string"
+    },
+    "created_at": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "title": "Created At",
+      "type": "string"
+    },
+    "dataset_version": {
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "gold_contract_version": {
+      "title": "Gold Contract Version",
+      "type": "string"
+    },
+    "input_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Input Sha256",
+      "type": "string"
+    },
+    "manifest_version": {
+      "title": "Manifest Version",
+      "type": "string"
+    },
+    "parquet_reader": {
+      "title": "Parquet Reader",
+      "type": "string"
+    },
+    "parquet_reader_version": {
+      "title": "Parquet Reader Version",
+      "type": "string"
+    },
+    "pointer_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Pointer Key",
+      "type": "string"
+    },
+    "rejected_count": {
+      "minimum": 0,
+      "title": "Rejected Count",
+      "type": "integer"
+    },
+    "run_id": {
+      "title": "Run Id",
+      "type": "string"
+    },
+    "silver_storage_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Silver Storage Key",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "storage_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Storage Key",
+      "type": "string"
+    },
+    "summary_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Summary Sha256",
+      "type": "string"
+    },
+    "summary_size_bytes": {
+      "minimum": 0,
+      "title": "Summary Size Bytes",
+      "type": "integer"
+    },
+    "total_distance_km": {
+      "pattern": "^-?\\d+(\\.\\d+)?$",
+      "title": "Total Distance Km",
+      "type": "string"
+    },
+    "transform_version": {
+      "title": "Transform Version",
+      "type": "string"
+    },
+    "trip_count": {
+      "minimum": 0,
+      "title": "Trip Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "manifest_version",
+    "source_id",
+    "dataset_version",
+    "input_sha256",
+    "contract_version",
+    "transform_version",
+    "silver_storage_key",
+    "gold_contract_version",
+    "aggregate_version",
+    "storage_key",
+    "pointer_key",
+    "bronze_run_id",
+    "run_id",
+    "created_at",
+    "status",
+    "summary_sha256",
+    "summary_size_bytes",
+    "parquet_reader",
+    "parquet_reader_version",
+    "trip_count",
+    "total_distance_km",
+    "average_duration_seconds",
+    "rejected_count"
+  ],
+  "title": "gold_generation",
+  "type": "object"
+}

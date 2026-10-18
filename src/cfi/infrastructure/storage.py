@@ -1,10 +1,10 @@
-"""Filesystem helpers for Bronze publication.
+"""Filesystem helpers for publication.
 
-Publication uses a directory rename onto a path that does not exist.
+Directory publication uses a rename onto a path that does not exist.
 On Windows, os.rename fails with FileExistsError when the destination exists,
 including when that destination is an empty directory. On other platforms,
 renameat2(RENAME_NOREPLACE) is required because os.rename can replace an empty
-directory. os.replace is not used.
+directory. os.replace is used only by replace_file, which publishes one file.
 """
 
 import ctypes
@@ -215,6 +215,26 @@ def _rename_noreplace(source: Path, destination: Path) -> None:
     if error in unsupported:
         raise StorageFailure("rename_noreplace_unavailable")
     raise OSError(error, os.strerror(error), str(destination))
+
+
+def replace_file(source: Path, destination: Path) -> None:
+    """Publish one file by atomic replacement. Directory publication does not use this."""
+
+    if is_reparse_point(source) or is_reparse_point(destination):
+        raise StorageFailure("reparse_point")
+    try:
+        destination_info = destination.lstat()
+    except FileNotFoundError:
+        destination_info = None
+    if destination_info is not None and stat.S_ISDIR(destination_info.st_mode):
+        raise StorageFailure("storage_error")
+    try:
+        os.replace(source, destination)
+    except OSError as exc:
+        winerror = getattr(exc, "winerror", None)
+        if exc.errno == errno.EXDEV or winerror == 17:
+            raise StorageFailure("cross_device") from exc
+        raise StorageFailure("storage_error") from exc
 
 
 def remove_tree_nofollow(path: Path, ancestor: Path) -> None:

@@ -1,4 +1,4 @@
-"""Command line for Bronze ingestion and Silver transformation."""
+"""Command line for Bronze ingestion, Silver transformation, and Gold publication."""
 
 import argparse
 import json
@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Never
 
 from cfi.application.errors import IngestFailure, usage
+from cfi.application.gold import GoldFailure, GoldRequest, GoldSettings, gold
 from cfi.application.ingest import (
     DEFAULT_LOCK_TIMEOUT_SECONDS,
     DEFAULT_MAX_INPUT_BYTES,
@@ -39,17 +40,45 @@ def main(argv: list[str] | None = None) -> int:
     transform_parser.add_argument("--dataset-version", required=True)
     transform_parser.add_argument("--run-id", required=True)
     transform_parser.add_argument("--dry-run", action="store_true")
+    gold_parser = subcommands.add_parser("gold")
+    gold_parser.add_argument("--source-id", required=True)
+    gold_parser.add_argument("--dataset-version", required=True)
+    gold_parser.add_argument("--input-sha256", required=True)
+    gold_parser.add_argument("--run-id", required=True)
+    gold_parser.add_argument("--dry-run", action="store_true")
+    gold_parser.add_argument("--promote", action="store_true")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         code = exc.code
         return 2 if code is None else int(code)
 
-    if args.command not in {"ingest", "transform"}:
+    if args.command not in {"ingest", "transform", "gold"}:
         _emit_error("usage", 2, dry_run=False)
         return 2
     try:
         settings = _settings_from_env()
+        if args.command == "gold":
+            try:
+                result = gold(
+                    GoldSettings(
+                        data_root=settings.data_root,
+                        lock_timeout_seconds=settings.lock_timeout_seconds,
+                    ),
+                    GoldRequest(
+                        source_id=args.source_id,
+                        dataset_version=args.dataset_version,
+                        input_sha256=args.input_sha256,
+                        run_id=args.run_id,
+                        dry_run=bool(args.dry_run),
+                        promote=bool(args.promote),
+                    ),
+                )
+            except GoldFailure as exc:
+                sys.stdout.write(json.dumps(exc.result.as_dict(), sort_keys=True) + "\n")
+                return exc.exit_code
+            sys.stdout.write(json.dumps(result.as_dict(), sort_keys=True) + "\n")
+            return result.exit_code
         if args.command == "transform":
             payload = transform(
                 TransformSettings(

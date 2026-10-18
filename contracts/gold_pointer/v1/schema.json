@@ -1,0 +1,44 @@
+{
+  "additionalProperties": false,
+  "contract_name": "gold_pointer",
+  "contract_version": "1",
+  "description": "Mutable pointer to one intact Gold snapshot for a source identity.",
+  "properties": {
+    "dataset_version": {
+      "title": "Dataset Version",
+      "type": "string"
+    },
+    "pointer_version": {
+      "title": "Pointer Version",
+      "type": "string"
+    },
+    "source_id": {
+      "title": "Source Id",
+      "type": "string"
+    },
+    "status": {
+      "title": "Status",
+      "type": "string"
+    },
+    "storage_key": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Storage Key",
+      "type": "string"
+    },
+    "summary_sha256": {
+      "pattern": "^[0-9a-f]{64}$",
+      "title": "Summary Sha256",
+      "type": "string"
+    }
+  },
+  "required": [
+    "pointer_version",
+    "source_id",
+    "dataset_version",
+    "storage_key",
+    "summary_sha256",
+    "status"
+  ],
+  "title": "gold_pointer",
+  "type": "object"
+}

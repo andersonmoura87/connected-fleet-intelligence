@@ -2,8 +2,29 @@
 
 import json
 import logging
+import re
+from datetime import UTC, datetime
+
+from pytest import MonkeyPatch
 
 from cfi.interfaces.serve import ServerLogFilter, ServerLogFormatter
+
+_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$")
+_LISTENING_KEYS = frozenset({"event", "level", "logger", "timestamp"})
+_FORBIDDEN_FIELDS = frozenset(
+    {
+        "bind",
+        "host",
+        "message",
+        "msg",
+        "pathname",
+        "port",
+        "query",
+        "query_string",
+        "uri",
+        "url",
+    }
+)
 
 
 def _record(
@@ -31,13 +52,30 @@ def test_listening_line_omits_host_and_port() -> None:
     )
     rendered = ServerLogFormatter().format(record)
     event = json.loads(rendered)
-    assert event["event"] == "server_listening"
-    assert event["logger"] == "uvicorn"
-    assert event["level"] == "info"
-    assert "0.0.0.0" not in rendered
-    assert "8000" not in rendered
+    _assert_listening(event)
     assert "secret" not in rendered
-    assert set(event) == {"event", "level", "logger", "timestamp"}
+    _assert_bind_absent(event, "0.0.0.0", "8000")
+
+
+def test_port_digits_inside_the_timestamp_do_not_expose_the_port(monkeypatch: MonkeyPatch) -> None:
+    class _Clock:
+        @staticmethod
+        def now(tz: object) -> datetime:
+            return datetime(2026, 10, 20, 17, 23, 45, 800000, tzinfo=UTC)
+
+    monkeypatch.setattr("cfi.interfaces.serve.datetime", _Clock)
+    rendered = ServerLogFormatter().format(
+        _record(
+            "Uvicorn running on %s://%s:%d (Press CTRL+C to quit)",
+            ("http", "0.0.0.0", 8000),
+        )
+    )
+    event = json.loads(rendered)
+    _assert_listening(event)
+    assert event["timestamp"] == "2026-10-20T17:23:45.800000Z"
+    assert "8000" in event["timestamp"]
+    assert "8000" in rendered
+    _assert_bind_absent(event, "0.0.0.0", "8000")
 
 
 def test_process_line_keeps_the_pid_only() -> None:
@@ -55,9 +93,8 @@ def test_bind_error_keeps_the_type_and_drops_the_address() -> None:
     assert event["level"] == "error"
     assert event["error_type"] == "OSError"
     assert event["errno"] == 98
-    assert "0.0.0.0" not in rendered
-    assert "8000" not in rendered
     assert "Address" not in rendered
+    _assert_bind_absent(event, "0.0.0.0", "8000")
 
 
 def test_unknown_text_is_not_copied() -> None:
@@ -69,3 +106,25 @@ def test_unknown_text_is_not_copied() -> None:
     assert json.loads(rendered)["event"] == "server_error"
     assert "secret" not in rendered
     assert "/tmp" not in rendered
+
+
+def _assert_listening(event: dict[str, object]) -> None:
+    assert event["event"] == "server_listening"
+    assert event["logger"] == "uvicorn"
+    assert event["level"] == "info"
+    timestamp = event["timestamp"]
+    assert isinstance(timestamp, str)
+    assert _TIMESTAMP.fullmatch(timestamp)
+    assert set(event) == _LISTENING_KEYS
+
+
+def _assert_bind_absent(event: dict[str, object], host: str, port: str) -> None:
+    assert _FORBIDDEN_FIELDS.isdisjoint(event)
+    content = json.dumps(
+        {key: value for key, value in event.items() if key != "timestamp"},
+        sort_keys=True,
+    )
+    assert host not in content
+    assert port not in content
+    assert "http://" not in content
+    assert "Press CTRL+C" not in content

@@ -8,6 +8,7 @@ dependencies = [
     "duckdb>=1.1,<2",
     "fastapi>=0.143.3",
     "pydantic>=2.10,<3",
+    "uvicorn>=0.35",
 ]
 
 [dependency-groups]

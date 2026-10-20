@@ -12,13 +12,23 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from cfi.infrastructure.storage import StorageFailure
+
 _BUSY = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}
 if hasattr(errno, "EDEADLK"):
     _BUSY.add(errno.EDEADLK)
+_DENIED = {errno.EACCES, errno.EROFS}
 
 
 class LockUnavailable(TimeoutError):
     """The source lock was still held when the wait expired."""
+
+
+class LockPathDenied(StorageFailure):
+    """The lock directory or marker cannot be created on this filesystem."""
+
+    def __init__(self) -> None:
+        super().__init__("storage_error")
 
 
 def lock_path_for(data_root: Path, source_id: str, dataset_version: str) -> Path:
@@ -31,7 +41,12 @@ def lock_path_for(data_root: Path, source_id: str, dataset_version: str) -> Path
 def source_lock(path: Path, timeout_seconds: float) -> Iterator[int]:
     """Hold the OS lock for this process. Do not unlink the shared marker."""
 
-    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        if exc.errno in _DENIED:
+            raise LockPathDenied() from exc
+        raise
     flags = os.O_CREAT | os.O_RDWR
     if hasattr(os, "O_CLOEXEC"):
         flags |= os.O_CLOEXEC
@@ -39,7 +54,12 @@ def source_lock(path: Path, timeout_seconds: float) -> Iterator[int]:
         flags |= os.O_NOINHERIT
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
-    fd = os.open(path, flags)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno == errno.EROFS:
+            raise LockPathDenied() from exc
+        raise
     acquired = False
     try:
         _acquire(fd, timeout_seconds)

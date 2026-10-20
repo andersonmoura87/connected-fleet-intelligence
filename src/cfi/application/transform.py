@@ -23,7 +23,7 @@ from cfi.domain.generation import (
 from cfi.domain.identifiers import validate_identifier
 from cfi.domain.silver import TRANSFORM_VERSION, LogicalBatch, reduce_bronze, storage_key_for
 from cfi.domain.trip import CONTRACT_VERSION
-from cfi.infrastructure.lock import LockUnavailable, source_lock
+from cfi.infrastructure.lock import LockPathDenied, LockUnavailable, source_lock
 from cfi.infrastructure.parquet import (
     ParquetRoundtripError,
     expected_quarantine_row,
@@ -35,6 +35,7 @@ from cfi.infrastructure.parquet import (
 from cfi.infrastructure.storage import (
     StorageFailure,
     assert_tree_has_no_reparse,
+    create_directory,
     fsync_directory,
     hash_file,
     is_reparse_point,
@@ -178,6 +179,8 @@ def transform(
                 settings=settings,
                 hooks=active,
             )
+    except LockPathDenied as exc:
+        raise storage("storage_error") from exc
     except LockUnavailable as exc:
         raise lock_unavailable() from exc
 
@@ -259,7 +262,7 @@ def _publish(
     published = False
     try:
         assert_tree_has_no_reparse(root, final.parent)
-        temp.mkdir(parents=True)
+        create_directory(temp)
         silver_path = temp / "silver.parquet"
         quarantine_path = temp / "quarantine.parquet"
         write_generation_parquet(
@@ -300,7 +303,7 @@ def _publish(
         if hooks.before_rename is not None:
             hooks.before_rename()
         _require_same_bronze(root, source_id, dataset_version, bronze, settings.max_input_bytes)
-        final.parent.mkdir(parents=True, exist_ok=True)
+        create_directory(final.parent, exist_ok=True)
         assert_tree_has_no_reparse(root, final)
         try:
             rename_exclusive(temp, final)

@@ -21,8 +21,9 @@ Phase 1 builds the local reference in this order. INC-001 through INC-007 are pr
 | INC-003 | Bronze ingestion | Implemented. Immutable original bytes, checksum, replay, and an OS-held lock per source identity. Publication renames a complete directory onto an absent final path. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
 | INC-004 | Silver transformation and quarantine | Implemented. DuckDB 1.5.6 writes Silver and quarantine Parquet. Generation identity includes trip_record `1.1.0` and transform version `1`. Replay of an equal generation is a no-op. A divergent generation is a conflict and is not replaced. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
 | INC-005 | Gold operational metrics | Implemented. DuckDB reads Silver Parquet. Python decimal arithmetic writes one JSON snapshot. Exclusive directory rename publishes the snapshot. `os.replace` publishes one pointer per `(source_id, dataset_version)`. `--promote` moves an intact pointer and does not repair a corrupt one. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
-| INC-006 | FastAPI read endpoints | Implemented. `GET /health/live` and `GET /v1/trips/summary` read a published pointer in-process. DuckDB stays off the request path. `cfi serve` is not implemented. |
+| INC-006 | FastAPI read endpoints | Implemented. `GET /health/live` and `GET /v1/trips/summary` read a published pointer in-process. DuckDB stays off the request path. The listener arrived in OPS-001. |
 | INC-007 | Integration, failure, and reproducibility tests | Implemented. One test runs the public CLI and then `TestClient`. Replay, a same-pointer promotion, and a durable snapshot without `current.json` are included. Per-stage lock tests stay in their increments. A container image is not part of this increment. |
+| OPS-001 | Linux runtime and one container image | Image definition and `cfi serve` are in the tree. The image is `linux/amd64`, non-root, and built from the locked runtime dependencies. Container execution evidence requires a running Docker engine. NFS and CIFS are out of scope. |
 
 ### Artifact identity
 

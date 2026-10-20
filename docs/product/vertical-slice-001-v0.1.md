@@ -16,10 +16,7 @@ Implemented:
 - `cfi ingest --input <path> --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]`
 - `cfi transform --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]`
 - `cfi gold --source-id <id> --dataset-version <version> --input-sha256 <sha256> --run-id <id> [--dry-run] [--promote]`
-
-Still proposed, and not implemented:
-
-- `cfi serve --host 127.0.0.1 --port 8000`
+- `cfi serve` reads `CFI_DATA_ROOT`, `CFI_HTTP_HOST`, and `CFI_HTTP_PORT`. It listens with Uvicorn and does not publish data.
 
 `--dataset-version` is required. It has no default. `--dry-run` evaluates the decision and creates no directory, lock, temporary file, or persistent log. Stdout is one JSON object. Transform does not accept `contract_version` or `transform_version` as flags. Those values come from the code: `1.1.0` and `1`. Gold does not accept them either, and it does not accept `silver_storage_key`. The caller passes `input_sha256`. Gold derives the Silver directory from that checksum and the versions in code. It does not open Bronze.
 
@@ -178,7 +175,7 @@ A crash after the rename can report an error while the directory is already visi
 ## API contract
 `GET /health/live` returns 200 `{"status": "live"}` when the application answers. It does not check Bronze, Silver, Gold, or `current.json`.
 
-`GET /health`, `GET /health/ready`, and `GET /metrics` are not implemented. `cfi serve` is not implemented.
+`GET /health`, `GET /health/ready`, and `GET /metrics` are not implemented. `cfi serve` listens on the two routes above.
 
 `GET /v1/trips/summary?source_id=<id>&dataset_version=<version>` returns the metrics in [trip_summary v1](../../contracts/trip_summary/v1/README.md). Decimal metrics are JSON strings. The average is null when there are zero trips. The body includes `input_sha256` and `storage_key` and does not include `generated_at`.
 

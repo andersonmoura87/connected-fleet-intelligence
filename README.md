@@ -17,8 +17,9 @@ Present in the tree:
 - INC-005: Gold publication from one Silver generation, immutable snapshot, and `cfi gold`.
 - INC-006: in-process read-only FastAPI routes over a published Gold pointer.
 - INC-007: one CLI-to-HTTP integration test and the reproduction steps below.
+- OPS-001: a Linux container image definition and `cfi serve`.
 
-Container images and cloud resources are not implemented. There is no listening server and no deployment in this repository. This is not a production platform.
+The image has not been built or run in this repository's recorded evidence: the Docker engine was not available. This is not a production platform.
 
 INC-003, INC-004, and INC-005 were exercised on Windows 10.0.26200 with Python 3.12.15, and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3) using the versions pinned in `uv.lock`. DuckDB 1.5.6 reads and writes the Parquet files. The Docker engine was not running, so there is no container evidence. Details and limits are in the vertical slice.
 
@@ -52,7 +53,13 @@ One pointer, `gold/published/{pointer_key}/current.json`, exists per `(source_id
 
 ## Read API
 
-`create_app(data_root)` returns a FastAPI application. Tests call it with `TestClient`. `cfi serve` is not implemented, and these tests do not bind a port.
+`create_app(data_root)` returns a FastAPI application. Tests call it with `TestClient`.
+
+```text
+cfi serve
+```
+
+`cfi serve` reads `CFI_DATA_ROOT`, `CFI_HTTP_HOST`, and `CFI_HTTP_PORT`. The host defaults to `127.0.0.1`. The port defaults to `8000`. It builds `create_app(data_root)` and listens with Uvicorn. It does not create the data root and it does not run ingest, transform, or gold. `GET /health/live` stays `{"status": "live"}` when Gold is absent. The summary route then returns 404 `not_published`. Set `CFI_HTTP_HOST=0.0.0.0` only for a container that publishes the port.
 
 `GET /health/live` returns `{"status": "live"}` when the application answers. It does not look for Bronze, Silver, Gold, or `current.json`, and it does not report readiness or data integrity.
 
@@ -118,9 +125,51 @@ The printed line is `2 12.750 1500.000000 0`. Repeating the three commands with 
 
 Remove the temporary directory when finished. PowerShell: `Remove-Item -Recurse -Force $root`. bash: `rm -rf "$root"`.
 
+## Linux container
+
+The image is `linux/amd64`. The base is the official glibc image `python:3.12-slim`, pinned to the amd64 manifest `sha256:2b4f19dae3a777dfc3b76730bda1e82e1f66ab2a2686fa93ca78edbfb4f04ffe`. That digest was read from the Docker registry index `sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1` for the tag `3.12-slim`. The builder copies uv `0.13.1` at `sha256:9a853e40f2eb00f980d265a84fba919dc38ff17750197e7f13c055e4e2f12edd` and runs `uv sync --frozen --no-dev --no-editable`. Development tools are not in the runtime stage. The process user is `cfi`, uid `10001`, gid `10001`. Application code lives under `/opt/cfi`. Data lives only at `/data`.
+
+These commands are the lab procedure. They were not executed here because the Docker engine was unavailable. They are not a production deployment, and they do not show durability across power loss.
+
+```text
+docker build --platform linux/amd64 -t cfi:0.1.0a0 .
+```
+
+Prerequisites for a lab run are a Docker engine that can build `linux/amd64` and a local volume on the same filesystem as the container writes. Do not mount NFS or CIFS. The host checks use Python 3.12 and uv and do not need the engine.
+
+Place the fixture on the volume as uid `10001` before batch. This does not change the publication commands:
+
+```text
+docker run --rm --user 10001:10001 --entrypoint /bin/sh -v cfi-lab-data:/data -v ${PWD}/tests/fixtures/synthetic:/fixtures:ro cfi:0.1.0a0 -c "mkdir -p /data/inbox && cp /fixtures/trips_valid.jsonl /data/inbox/trips_valid.jsonl"
+```
+
+Batch uses a short container, `--network none`, a read-only root filesystem, `/tmp` on tmpfs, and the writable data volume. Temporary files and final paths both stay under `/data`:
+
+```text
+docker run --rm --network none --read-only --tmpfs /tmp --memory 512m --cpus 1 --user 10001:10001 -e CFI_DATA_ROOT=/data -v cfi-lab-data:/data cfi:0.1.0a0 ingest --input /data/inbox/trips_valid.jsonl --source-id synthetic.trips.v1 --dataset-version v1 --run-id bronze-001
+```
+
+Repeat `transform` and `gold` as new containers against the same volume. A second run of the same three commands is replay: ingest and transform report `noop`, and gold reports `noop`. Removing and recreating the container leaves the named volume in place. `docker volume rm cfi-lab-data` deletes that lab volume and nothing else.
+
+The API is a different container. It mounts `/data` read-only and publishes the port only on the host loopback. `CFI_HTTP_HOST=0.0.0.0` is the bind inside the container. Outside a container the default remains `127.0.0.1`. The default port is `8000`.
+
+```text
+docker run --rm --name cfi-lab-api --read-only --tmpfs /tmp --memory 256m --cpus 1 --user 10001:10001 -e CFI_DATA_ROOT=/data -e CFI_HTTP_HOST=0.0.0.0 -e CFI_HTTP_PORT=8000 -v cfi-lab-data:/data:ro -p 127.0.0.1:8000:8000 cfi:0.1.0a0 serve
+```
+
+The liveness check is `GET /health/live`. It does not read Gold. The procedure expects HTTP 200 `{"status":"live"}` when the process is up, including before publication. The summary route then expects HTTP 404 `not_published`. After the synthetic publication it expects HTTP 200 with 2 trips, `12.750`, `1500.000000`, and 0 rejected. Those HTTP results were not executed in this increment. `docker stop cfi-lab-api` sends SIGTERM. Uvicorn stops listening and then re-raises that signal, so the process status is the signal. The API does not rewrite the volume. Do not use the root user or mode `777` to fix a volume. A read-only data mount on a batch command is expected to fail the command and publish nothing.
+
+Cleanup of this lab only:
+
+```text
+docker rm -f cfi-lab-api
+docker volume rm cfi-lab-data
+docker rmi cfi:0.1.0a0
+```
+
 ## Toolchain
 
-The project targets Python 3.12 through uv. uv keeps that interpreter in its own cache and does not replace the system Python. Direct dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. The runtime dependencies are Pydantic v2, DuckDB, and FastAPI. HTTPX is a development dependency used by `TestClient`. Pandas and PyArrow are not direct dependencies. The HTTP modules do not import DuckDB.
+The project targets Python 3.12 through uv. uv keeps that interpreter in its own cache and does not replace the system Python. Direct dependencies are declared in `pyproject.toml` and pinned in `uv.lock`. The runtime dependencies are Pydantic v2, DuckDB, FastAPI, and Uvicorn. HTTPX is a development dependency used by `TestClient`. Pandas and PyArrow are not direct dependencies. The HTTP modules do not import DuckDB.
 
 Configured checks:
 

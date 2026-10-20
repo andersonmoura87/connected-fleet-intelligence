@@ -1,22 +1,21 @@
-"""Command line for Bronze ingestion, Silver transformation, and Gold publication."""
+"""Command line for batch publication and the read-only HTTP server.
+
+Batch imports stay inside the ingest, transform, and gold branches so `cfi serve`
+does not load DuckDB.
+"""
 
 import argparse
 import json
 import os
 import sys
 from pathlib import Path
-from typing import Never
+from typing import TYPE_CHECKING, Never
 
 from cfi.application.errors import IngestFailure, usage
-from cfi.application.gold import GoldFailure, GoldRequest, GoldSettings, gold
-from cfi.application.ingest import (
-    DEFAULT_LOCK_TIMEOUT_SECONDS,
-    DEFAULT_MAX_INPUT_BYTES,
-    IngestRequest,
-    IngestSettings,
-    ingest,
-)
-from cfi.application.transform import TransformRequest, TransformSettings, transform
+from cfi.interfaces.serve import serve, serve_from_env
+
+if TYPE_CHECKING:
+    from cfi.application.ingest import IngestSettings
 
 
 class _Parser(argparse.ArgumentParser):
@@ -47,18 +46,23 @@ def main(argv: list[str] | None = None) -> int:
     gold_parser.add_argument("--run-id", required=True)
     gold_parser.add_argument("--dry-run", action="store_true")
     gold_parser.add_argument("--promote", action="store_true")
+    subcommands.add_parser("serve")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         code = exc.code
         return 2 if code is None else int(code)
 
+    if args.command == "serve":
+        return _serve()
     if args.command not in {"ingest", "transform", "gold"}:
         _emit_error("usage", 2, dry_run=False)
         return 2
     try:
         settings = _settings_from_env()
         if args.command == "gold":
+            from cfi.application.gold import GoldFailure, GoldRequest, GoldSettings, gold
+
             try:
                 result = gold(
                     GoldSettings(
@@ -80,6 +84,8 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout.write(json.dumps(result.as_dict(), sort_keys=True) + "\n")
             return result.exit_code
         if args.command == "transform":
+            from cfi.application.transform import TransformRequest, TransformSettings, transform
+
             payload = transform(
                 TransformSettings(
                     data_root=settings.data_root,
@@ -94,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
                 ),
             ).as_dict()
         else:
+            from cfi.application.ingest import IngestRequest, ingest
+
             payload = ingest(
                 settings,
                 IngestRequest(
@@ -111,7 +119,23 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _settings_from_env() -> IngestSettings:
+def _serve() -> int:
+    try:
+        settings = serve_from_env()
+        serve(settings.data_root, settings.host, settings.port)
+    except IngestFailure as exc:
+        _emit_error(exc.code, exc.exit_code, dry_run=False)
+        return exc.exit_code
+    return 0
+
+
+def _settings_from_env() -> "IngestSettings":
+    from cfi.application.ingest import (
+        DEFAULT_LOCK_TIMEOUT_SECONDS,
+        DEFAULT_MAX_INPUT_BYTES,
+        IngestSettings,
+    )
+
     root = Path(os.environ.get("CFI_DATA_ROOT", "data"))
     try:
         max_bytes = int(os.environ.get("CFI_MAX_INPUT_BYTES", str(DEFAULT_MAX_INPUT_BYTES)))

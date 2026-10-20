@@ -1,6 +1,6 @@
 # System Design v0.2
 
-Status: proposed. The diagram describes intended components, not deployed resources. Local Bronze ingestion, local Silver transformation, local Gold publication, and the in-process read-only FastAPI routes are implemented. Containers, a listening server, and cloud resources are not.
+Status: proposed. The diagram describes intended components, not deployed resources. Local Bronze ingestion, local Silver transformation, local Gold publication, the in-process read-only FastAPI routes, and `cfi serve` are implemented. A Linux image definition is in the repository. That image has not been executed here. Cloud resources are not.
 
 ## Architectural principles
 1. Solve a business problem before adding a platform component.
@@ -42,7 +42,7 @@ flowchart TB
 - ML: separate training/evaluation artifacts and leakage checks.
 
 ## Operational boundaries
-- Local development: Python, Parquet, DuckDB, FastAPI, Docker Compose.
+- Local development: Python, Parquet, DuckDB, FastAPI, and one Linux image with two processes. Batch is a short `cfi` container. The API is a separate `cfi serve` container. Both use a local volume at `/data`. The image definition is in the repository and has not been executed here. It is not a high-availability deployment and it is not a claim of durability after power loss. NFS and CIFS are out of scope.
 - Analytical sandbox: Databricks Free Edition only when capability and data-sharing limitations are checked. Export/import is explicit; not synchronous serving dependency.
 - Platform lab: kind/k3d, GitHub Actions, Argo CD, Prometheus/Grafana and runbooks, progressively.
 - Cloud foundation: AWS Organizations/Control Tower/AFT architecture and policy exercises first; real deployment gated by account access, security review and approved budget.

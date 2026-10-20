@@ -46,6 +46,17 @@ class StorageFailure(OSError):
         self.code = code
 
 
+def create_directory(path: Path, *, exist_ok: bool = False) -> None:
+    """Create a publication directory. A read-only or forbidden path is storage_error."""
+
+    try:
+        path.mkdir(parents=True, exist_ok=exist_ok)
+    except OSError as exc:
+        if exc.errno in {errno.EACCES, errno.EROFS}:
+            raise StorageFailure("storage_error") from exc
+        raise
+
+
 def is_reparse_point(path: Path) -> bool:
     try:
         info = path.lstat()

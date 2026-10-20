@@ -35,7 +35,7 @@ from cfi.domain.gold import (
 from cfi.domain.identifiers import validate_identifier
 from cfi.domain.silver import TRANSFORM_VERSION, storage_key_for
 from cfi.domain.trip import CONTRACT_VERSION
-from cfi.infrastructure.lock import LockUnavailable, source_lock
+from cfi.infrastructure.lock import LockPathDenied, LockUnavailable, source_lock
 from cfi.infrastructure.parquet import (
     ParquetRoundtripError,
     read_generation_parquet,
@@ -261,6 +261,8 @@ def _execute(settings: GoldSettings, request: GoldRequest, hooks: GoldHooks) -> 
     try:
         with source_lock(marker, settings.lock_timeout_seconds):
             snapshot = _finish(settings, context, hooks, publish=True)
+    except LockPathDenied as exc:
+        raise _Halt(_storage_result(context, "storage_error")) from exc
     except LockUnavailable:
         return _snapshot_lock_unavailable(root, context)
     except AggregationError:
@@ -283,6 +285,17 @@ def _execute(settings: GoldSettings, request: GoldRequest, hooks: GoldHooks) -> 
     try:
         with source_lock(pointer_marker, settings.lock_timeout_seconds):
             return _pointer(settings, context, hooks, snapshot)
+    except LockPathDenied as exc:
+        raise _Halt(
+            _copy(
+                snapshot,
+                status="partial",
+                code="storage_error",
+                exit_code=4,
+                pointer_state="pointer_unchanged",
+                pointer_replaced=False,
+            )
+        ) from exc
     except LockUnavailable:
         return _copy(
             snapshot,

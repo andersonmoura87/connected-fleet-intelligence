@@ -19,11 +19,12 @@ from cfi.domain.bronze import (
     decide,
 )
 from cfi.domain.identifiers import validate_identifier
-from cfi.infrastructure.lock import LockUnavailable, lock_path_for, source_lock
+from cfi.infrastructure.lock import LockPathDenied, LockUnavailable, lock_path_for, source_lock
 from cfi.infrastructure.storage import (
     StorageFailure,
     assert_tree_has_no_reparse,
     copy_hashed,
+    create_directory,
     fsync_directory,
     hash_file,
     is_regular_file,
@@ -169,6 +170,8 @@ def ingest(
                 observed_size,
                 active_hooks,
             )
+    except LockPathDenied as exc:
+        raise storage("storage_error") from exc
     except LockUnavailable as exc:
         raise lock_unavailable() from exc
 
@@ -190,7 +193,7 @@ def _publish(
     published = False
     try:
         assert_tree_has_no_reparse(root, final.parent)
-        temp.mkdir(parents=True)
+        create_directory(temp)
         original = temp / "original"
         copied_sha, copied_size = copy_hashed(input_path, original, settings.max_input_bytes)
         if copied_sha != first_sha or copied_size != first_size:
@@ -214,7 +217,7 @@ def _publish(
         write_bytes_fsync(temp / "manifest.json", _manifest_bytes(manifest))
         if hooks.before_rename is not None:
             hooks.before_rename()
-        final.parent.mkdir(parents=True, exist_ok=True)
+        create_directory(final.parent, exist_ok=True)
         assert_tree_has_no_reparse(root, final)
         try:
             rename_exclusive(temp, final)

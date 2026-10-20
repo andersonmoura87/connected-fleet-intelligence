@@ -12,7 +12,7 @@ Indicative 16-week delivery sequence, assuming approximately 8 hours/week. Re-pl
 
 ## Vertical Slice 001 increment sequence
 
-Phase 1 builds the local reference in this order. INC-001, INC-002, INC-003, INC-004, INC-005, and INC-006 are present in the repository. INC-007 and later rows are specified and not implemented.
+Phase 1 builds the local reference in this order. INC-001 through INC-007 are present in the repository. INC-008 and later rows are specified and not implemented.
 
 | Increment | Scope | Notes |
 |---|---|---|
@@ -22,7 +22,7 @@ Phase 1 builds the local reference in this order. INC-001, INC-002, INC-003, INC
 | INC-004 | Silver transformation and quarantine | Implemented. DuckDB 1.5.6 writes Silver and quarantine Parquet. Generation identity includes trip_record `1.1.0` and transform version `1`. Replay of an equal generation is a no-op. A divergent generation is a conflict and is not replaced. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
 | INC-005 | Gold operational metrics | Implemented. DuckDB reads Silver Parquet. Python decimal arithmetic writes one JSON snapshot. Exclusive directory rename publishes the snapshot. `os.replace` publishes one pointer per `(source_id, dataset_version)`. `--promote` moves an intact pointer and does not repair a corrupt one. Exercised on Windows and on WSL2 ext4. No power-loss durability claim. |
 | INC-006 | FastAPI read endpoints | Implemented. `GET /health/live` and `GET /v1/trips/summary` read a published pointer in-process. DuckDB stays off the request path. `cfi serve` is not implemented. |
-| INC-007 | Integration, failure, and reproducibility tests | Includes contended publication. The container image follows this increment and is not part of its definition of done. |
+| INC-007 | Integration, failure, and reproducibility tests | Implemented. One test runs the public CLI and then `TestClient`. Replay, a same-pointer promotion, and a durable snapshot without `current.json` are included. Per-stage lock tests stay in their increments. A container image is not part of this increment. |
 
 ### Artifact identity
 

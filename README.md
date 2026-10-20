@@ -16,6 +16,7 @@ Present in the tree:
 - INC-004: `trip_record` v1.1.0, Bronze to Silver transformation, quarantine, and `cfi transform`.
 - INC-005: Gold publication from one Silver generation, immutable snapshot, and `cfi gold`.
 - INC-006: in-process read-only FastAPI routes over a published Gold pointer.
+- INC-007: one CLI-to-HTTP integration test and the reproduction steps below.
 
 Container images and cloud resources are not implemented. There is no listening server and no deployment in this repository. This is not a production platform.
 
@@ -74,6 +75,48 @@ An HTTP 200 body contains `source_id`, `dataset_version`, `input_sha256`, `stora
 | 500 | `path_limit`, `reparse_point`, `path_escape`, `storage_error` | Path limit, reparse point, escape, or another filesystem failure. |
 
 Error bodies are `{"code": "<code>"}`. They do not include a filesystem path or a traceback. A corrupt pointer or snapshot is not reported as 404.
+
+## Reproduce the synthetic slice
+
+Use Python 3.12 and uv. Install the locked dependencies once:
+
+```text
+uv sync
+```
+
+Point `CFI_DATA_ROOT` at an empty temporary directory. These commands do not open a port.
+
+PowerShell:
+
+```powershell
+$root = Join-Path $env:TEMP "cfi-demo"
+New-Item -ItemType Directory -Force -Path $root | Out-Null
+$env:CFI_DATA_ROOT = $root
+uv run cfi ingest --input tests/fixtures/synthetic/trips_valid.jsonl --source-id synthetic.trips.v1 --dataset-version v1 --run-id bronze-001
+```
+
+The ingest command prints one JSON object. Copy `input_sha256` from that object, then run:
+
+```powershell
+uv run cfi transform --source-id synthetic.trips.v1 --dataset-version v1 --run-id silver-001
+uv run cfi gold --source-id synthetic.trips.v1 --dataset-version v1 --input-sha256 <input_sha256> --run-id gold-001
+uv run python -c "from pathlib import Path; import os; from fastapi.testclient import TestClient; from cfi.interfaces.http import create_app; client = TestClient(create_app(Path(os.environ['CFI_DATA_ROOT']))); body = client.get('/v1/trips/summary', params={'source_id': 'synthetic.trips.v1', 'dataset_version': 'v1'}).json(); print(body['trip_count'], body['total_distance_km'], body['average_duration_seconds'], body['rejected_count'])"
+```
+
+bash:
+
+```bash
+root=$(mktemp -d)
+export CFI_DATA_ROOT="$root"
+uv run cfi ingest --input tests/fixtures/synthetic/trips_valid.jsonl --source-id synthetic.trips.v1 --dataset-version v1 --run-id bronze-001
+uv run cfi transform --source-id synthetic.trips.v1 --dataset-version v1 --run-id silver-001
+uv run cfi gold --source-id synthetic.trips.v1 --dataset-version v1 --input-sha256 <input_sha256> --run-id gold-001
+uv run python -c 'from pathlib import Path; import os; from fastapi.testclient import TestClient; from cfi.interfaces.http import create_app; client = TestClient(create_app(Path(os.environ["CFI_DATA_ROOT"]))); body = client.get("/v1/trips/summary", params={"source_id": "synthetic.trips.v1", "dataset_version": "v1"}).json(); print(body["trip_count"], body["total_distance_km"], body["average_duration_seconds"], body["rejected_count"])'
+```
+
+The printed line is `2 12.750 1500.000000 0`. Repeating the three commands with new run ids leaves the input in place: ingest and transform report `"status": "noop"`, and gold reports `"code": "noop"`. The HTTP body stays the same. `created_at` on the manifests is the clock of the first publication.
+
+Remove the temporary directory when finished. PowerShell: `Remove-Item -Recurse -Force $root`. bash: `rm -rf "$root"`.
 
 ## Toolchain
 

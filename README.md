@@ -19,6 +19,7 @@ Present in the tree:
 - INC-007: one CLI-to-HTTP integration test and the reproduction steps below.
 - OPS-001: a Linux container image definition and `cfi serve`.
 - OPS-002: a GitHub Actions workflow for quality, tests, and a Linux container smoke test. That workflow has not been executed on GitHub.
+- OPS-003: one JSON operational event per command boundary and per completed HTTP request, written to stderr. There is no metrics endpoint and no external collector.
 
 The image has not been built or run in this repository's recorded evidence: the Docker engine was not available. This is not a production platform.
 
@@ -38,7 +39,7 @@ cfi ingest --input <path> --source-id <id> --dataset-version <version> --run-id 
 cfi transform --source-id <id> --dataset-version <version> --run-id <id> [--dry-run]
 ```
 
-The command reads one published Bronze directory. It does not take a file path and it does not modify Bronze. `contract_version` is `1.1.0` and `transform_version` is `1`; neither is a flag. `--dry-run` returns counts and the decision without creating a directory, lock, temporary file, or persistent log.
+The command reads one published Bronze directory. It does not take a file path and it does not modify Bronze. `contract_version` is `1.1.0` and `transform_version` is `1`; neither is a flag. `--dry-run` returns counts and the decision without creating a directory, lock, temporary file, or persistent log. An event with `status` `succeeded` and `dry_run` `true` records that decision. It does not mean the dataset was stored.
 
 ## Gold publication
 
@@ -83,6 +84,26 @@ An HTTP 200 body contains `source_id`, `dataset_version`, `input_sha256`, `stora
 | 500 | `path_limit`, `reparse_point`, `path_escape`, `storage_error` | Path limit, reparse point, escape, or another filesystem failure. |
 
 Error bodies are `{"code": "<code>"}`. They do not include a filesystem path or a traceback. A corrupt pointer or snapshot is not reported as 404.
+
+## Operational events
+
+Stdout remains the machine result: one JSON object for `cfi ingest`, `cfi transform`, and `cfi gold`, and the HTTP body for the API. Stderr is a JSON Lines log for operators. The process does not open a log file. These lines are not distributed traces, and they are not a latency percentile or an SLO.
+
+Each line has `timestamp` (UTC, `Z` suffix), `event_name`, `stage`, and `status`. `duration_ms` is whole milliseconds for one execution, measured with `perf_counter_ns`. It is one sample. A batch command writes `command_started` and then `command_finished`. `cfi serve` writes one `http_request` when a response finishes. `stage` is `ingest`, `transform`, `gold`, or `serve`. `status` is `started`, `succeeded`, `noop`, `rejected`, or `partial`.
+
+Optional fields appear only when that execution already knows them: `run_id`, `source_id`, `dataset_version`, `duration_ms`, `error_code`, `exit_code`, `dry_run`, record counts already present on the result, `snapshot_state`, `pointer_state`, `snapshot_durable`, `pointer_replaced`, `route`, and `http_status`. An unknown HTTP path uses the route `unmatched`. The event omits trip payloads, coordinates, absolute paths, the data root, exception text, stack traces, environment variables, secrets, the query string, and `input_sha256`.
+
+`duration_ms` does not establish a service level. Counts are the integers the command already computed. `partial` means a Gold snapshot is durable and the pointer was not replaced. HTTP 200 on `/v1/trips/summary` means that pointer read succeeded. `GET /health/live` does not consult Gold. There is no `/metrics` endpoint and no collector in this process.
+
+`status` `succeeded` with `dry_run` `true` means the command finished its decision and wrote nothing. Stdout is unchanged: an ingest or transform dry-run can still report `status` `published` and `dry_run` `true` while the data root stays absent. That pair is not a stored publication. Exit codes stay the same.
+
+Batch commands write only application events to stderr. `cfi serve` also writes Uvicorn lifecycle lines to stderr through the standard-library logger. A lifecycle line has `logger` `uvicorn` and `event`. It does not have `event_name`, so it is not an application event. The listening line does not include the bind address or the port. Exception text, paths, and query strings are omitted. A server failure remains visible as `server_error`, `startup_failed`, or `shutdown_failed`, with `error_type` and `errno` when the exception has them. Access logs stay off. One request still produces one `http_request` line.
+
+```text
+{"dataset_version": "v1", "dry_run": false, "duration_ms": 12, "event_name": "command_finished", "exit_code": 0, "run_id": "bronze-001", "source_id": "synthetic.trips.v1", "stage": "ingest", "status": "succeeded", "timestamp": "2026-10-20T04:16:00.000000Z"}
+```
+
+The example is one finished ingest. A real line also includes the timestamp of that process. Keys are sorted. Replay uses `status` `noop`. A classified failure uses `rejected` and the same `error_code` as stdout. Gold uses `partial` when the snapshot remains and the pointer does not move.
 
 ## Reproduce the synthetic slice
 

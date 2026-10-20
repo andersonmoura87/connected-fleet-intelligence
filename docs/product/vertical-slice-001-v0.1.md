@@ -18,7 +18,7 @@ Implemented:
 - `cfi gold --source-id <id> --dataset-version <version> --input-sha256 <sha256> --run-id <id> [--dry-run] [--promote]`
 - `cfi serve` reads `CFI_DATA_ROOT`, `CFI_HTTP_HOST`, and `CFI_HTTP_PORT`. It listens with Uvicorn and does not publish data.
 
-`--dataset-version` is required. It has no default. `--dry-run` evaluates the decision and creates no directory, lock, temporary file, or persistent log. Stdout is one JSON object. Transform does not accept `contract_version` or `transform_version` as flags. Those values come from the code: `1.1.0` and `1`. Gold does not accept them either, and it does not accept `silver_storage_key`. The caller passes `input_sha256`. Gold derives the Silver directory from that checksum and the versions in code. It does not open Bronze.
+`--dataset-version` is required. It has no default. `--dry-run` evaluates the decision and creates no directory, lock, temporary file, or persistent log. An event `status` of `succeeded` with `dry_run` `true` is that decision, not a stored publication. Stdout is one JSON object and keeps its existing status. Stderr is a JSON Lines operational log and is not a second copy of the result. Transform does not accept `contract_version` or `transform_version` as flags. Those values come from the code: `1.1.0` and `1`. Gold does not accept them either, and it does not accept `silver_storage_key`. The caller passes `input_sha256`. Gold derives the Silver directory from that checksum and the versions in code. It does not open Bronze.
 
 Exit codes for `cfi ingest` and `cfi transform`:
 

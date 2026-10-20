@@ -162,7 +162,7 @@ def test_cli_reports_lock_erofs_without_publishing(
     )
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert code == 4
-    assert captured.err == ""
+    _assert_storage_events(captured.err, root, tmp_path)
     assert json.loads(captured.out) == {
         "code": "storage_error",
         "dry_run": False,
@@ -204,7 +204,7 @@ def test_cli_reports_publication_eacces_without_replacing_artifacts(
     )
     captured = capsys.readouterr()  # type: ignore[attr-defined]
     assert code == 4
-    assert captured.err == ""
+    _assert_storage_events(captured.err, root, tmp_path)
     assert json.loads(captured.out) == {
         "code": "storage_error",
         "dry_run": False,
@@ -215,6 +215,19 @@ def test_cli_reports_publication_eacces_without_replacing_artifacts(
     assert not (root / "bronze" / "sources" / "synthetic.trips.denied").exists()
     incoming = root / "bronze" / ".incoming"
     assert not incoming.exists() or list(incoming.iterdir()) == []
+
+
+def _assert_storage_events(stderr: str, root: Path, tmp_path: Path) -> None:
+    assert "Traceback" not in stderr
+    assert "Permission denied" not in stderr
+    assert "Read-only file system" not in stderr
+    assert str(root) not in stderr
+    assert str(tmp_path) not in stderr
+    events = [json.loads(line) for line in stderr.splitlines() if line]
+    assert [event["event_name"] for event in events] == ["command_started", "command_finished"]
+    assert events[1]["status"] == "rejected"
+    assert events[1]["error_code"] == "storage_error"
+    assert events[1]["exit_code"] == 4
 
 
 def _published(

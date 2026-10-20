@@ -12,7 +12,7 @@ Indicative 16-week delivery sequence, assuming approximately 8 hours/week. Re-pl
 
 ## Vertical Slice 001 increment sequence
 
-Phase 1 builds the local reference in this order. INC-001 through INC-007 are present in the repository. INC-008 and later rows are specified and not implemented. OPS-002 adds the CI workflow definition. Phase 3 in the table above still includes kind, Argo CD, and the rest of the developer platform.
+Phase 1 builds the local reference in this order. INC-001 through INC-007 are present in the repository. INC-008 and later rows are specified and not implemented. OPS-002 adds the CI workflow definition. OPS-003 adds stderr JSON Lines for batch commands and HTTP requests. Phase 3 in the table above still includes kind, Argo CD, and the rest of the developer platform. Phase 4 still includes a measured observability platform; OPS-003 is not that platform.
 
 | Increment | Scope | Notes |
 |---|---|---|
@@ -25,6 +25,7 @@ Phase 1 builds the local reference in this order. INC-001 through INC-007 are pr
 | INC-007 | Integration, failure, and reproducibility tests | Implemented. One test runs the public CLI and then `TestClient`. Replay, a same-pointer promotion, and a durable snapshot without `current.json` are included. Per-stage lock tests stay in their increments. A container image is not part of this increment. |
 | OPS-001 | Linux runtime and one container image | Image definition and `cfi serve` are in the tree. The image is `linux/amd64`, non-root, and built from the locked runtime dependencies. Container execution evidence requires a running Docker engine. NFS and CIFS are out of scope. |
 | OPS-002 | GitHub Actions continuous integration | Workflow for `quality`, `test`, and `container` on push to `main` and on pull requests. The container job builds `linux/amd64` and runs one synthetic smoke test. Ubuntu does not replace the Windows gate. The workflow file is not evidence that GitHub has executed it. |
+| OPS-003 | Observability foundations | Stderr JSON Lines from the standard library: `command_started`, `command_finished`, and `http_request`. Uvicorn lifecycle lines use the same library and omit the bind address. Stdout stays the machine result. `succeeded` with `dry_run` true is not a stored publication. No log file, metrics endpoint, collector, or distributed trace. `duration_ms` is one sample, not an SLO. |
 
 ### Artifact identity
 

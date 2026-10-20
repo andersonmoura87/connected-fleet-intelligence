@@ -76,11 +76,18 @@ def test_cli_serve_starts_without_writing_or_publishing(
     root = tmp_path / "absent"
     seen: dict[str, object] = {}
 
-    def fake_run(app: object, host: str, port: int, access_log: bool) -> None:
+    def fake_run(
+        app: object,
+        host: str,
+        port: int,
+        access_log: bool,
+        log_config: dict[str, object],
+    ) -> None:
         seen["app"] = app
         seen["host"] = host
         seen["port"] = port
         seen["access_log"] = access_log
+        seen["log_config"] = log_config
 
     monkeypatch.setenv("CFI_DATA_ROOT", str(root))
     monkeypatch.setenv("CFI_HTTP_HOST", "127.0.0.1")
@@ -92,6 +99,11 @@ def test_cli_serve_starts_without_writing_or_publishing(
     assert seen["host"] == "127.0.0.1"
     assert seen["port"] == 8000
     assert seen["access_log"] is False
+    log_config = seen["log_config"]
+    assert isinstance(log_config, dict)
+    handlers = log_config["handlers"]
+    assert isinstance(handlers, dict)
+    assert "access" not in handlers
     assert not root.exists()
 
 

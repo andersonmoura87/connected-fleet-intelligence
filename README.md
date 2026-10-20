@@ -18,6 +18,7 @@ Present in the tree:
 - INC-006: in-process read-only FastAPI routes over a published Gold pointer.
 - INC-007: one CLI-to-HTTP integration test and the reproduction steps below.
 - OPS-001: a Linux container image definition and `cfi serve`.
+- OPS-002: a GitHub Actions workflow for quality, tests, and a Linux container smoke test. That workflow has not been executed on GitHub.
 
 The image has not been built or run in this repository's recorded evidence: the Docker engine was not available. This is not a production platform.
 
@@ -166,6 +167,16 @@ docker rm -f cfi-lab-api
 docker volume rm cfi-lab-data
 docker rmi cfi:0.1.0a0
 ```
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on a push to `main` and on pull requests. The runner is `ubuntu-24.04`. The workflow permission is `contents: read`. It does not publish an image and it does not use a secret. Three jobs run independently:
+
+- `quality` runs `uv sync --frozen`, `uv run ruff check .`, `uv run ruff format --check .`, and `uv run mypy src`.
+- `test` runs `uv sync --frozen` and `uv run pytest -q`.
+- `container` builds the `linux/amd64` image and runs ingest, transform, and gold on a volume named for that run. It then requests `GET /health/live` and `GET /v1/trips/summary`.
+
+A non-zero exit fails the job. The workflow does not retry a failed test. Host jobs resolve dependencies with `uv sync --frozen` from `uv.lock`. The uv download cache is off, because saving it would require an Actions write permission. Ubuntu does not create Windows directory junctions, so those tests skip. A Windows run remains local evidence. This section describes the workflow file. It is not a record of a completed GitHub Actions run.
 
 ## Toolchain
 

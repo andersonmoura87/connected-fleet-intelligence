@@ -1,0 +1,217 @@
+name: ci
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python 3.12
+        # astral-sh/setup-uv v10.3.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: "0.13.1"
+          python-version: "3.12"
+          enable-cache: false
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen
+
+      - name: Ruff
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: mypy
+        run: uv run mypy src
+
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Install uv and Python 3.12
+        # astral-sh/setup-uv v10.3.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: "0.13.1"
+          python-version: "3.12"
+          enable-cache: false
+
+      - name: Sync locked dependencies
+        run: uv sync --frozen
+
+      - name: Pytest
+        run: uv run pytest -q
+
+  container:
+    name: container
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CFI_RUN_ID: ${{ github.run_id }}
+      CFI_RUN_ATTEMPT: ${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build and smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$CFI_RUN_ID" in
+            ''|*[!0-9]*) echo "run id is not numeric" >&2; exit 1 ;;
+          esac
+          case "$CFI_RUN_ATTEMPT" in
+            ''|*[!0-9]*) echo "run attempt is not numeric" >&2; exit 1 ;;
+          esac
+          tag="cfi-ci:${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}"
+          volume="cfi-ci-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}"
+          api="cfi-ci-api-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}"
+          echo "docker version"
+          docker version
+          docker build --platform linux/amd64 -t "$tag" .
+          docker image inspect --format 'image_id={{.Id}} user={{.Config.User}} entrypoint={{json .Config.Entrypoint}} architecture={{.Architecture}} os={{.Os}}' "$tag"
+          docker volume create "$volume"
+          docker run --rm \
+            --name "cfi-ci-copy-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            --user 10001:10001 \
+            --read-only \
+            --tmpfs /tmp \
+            --entrypoint /bin/sh \
+            -v "${volume}:/data" \
+            -v "${GITHUB_WORKSPACE}/tests/fixtures/synthetic:/fixtures:ro" \
+            "$tag" \
+            -c 'mkdir -p /data/inbox && cp /fixtures/trips_valid.jsonl /data/inbox/trips_valid.jsonl'
+          docker run --rm \
+            --name "cfi-ci-id-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            --user 10001:10001 \
+            --read-only \
+            --tmpfs /tmp \
+            --network none \
+            --entrypoint /bin/sh \
+            "$tag" \
+            -c 'id; command -v cfi'
+          ingest_out="$(docker run --rm \
+            --name "cfi-ci-ingest-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            --network none \
+            --read-only \
+            --tmpfs /tmp \
+            --user 10001:10001 \
+            -e CFI_DATA_ROOT=/data \
+            -v "${volume}:/data" \
+            "$tag" \
+            ingest --input /data/inbox/trips_valid.jsonl --source-id synthetic.trips.v1 --dataset-version v1 --run-id bronze-001)"
+          printf '%s\n' "$ingest_out"
+          sha="$(printf '%s\n' "$ingest_out" | python3 -c 'import json,sys; body=json.load(sys.stdin); sha=body["input_sha256"]; assert isinstance(sha,str) and len(sha)==64 and all(c in "0123456789abcdef" for c in sha); print(sha)')"
+          echo "input_sha256=${sha}"
+          transform_out="$(docker run --rm \
+            --name "cfi-ci-transform-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            --network none \
+            --read-only \
+            --tmpfs /tmp \
+            --user 10001:10001 \
+            -e CFI_DATA_ROOT=/data \
+            -v "${volume}:/data" \
+            "$tag" \
+            transform --source-id synthetic.trips.v1 --dataset-version v1 --run-id silver-001)"
+          printf '%s\n' "$transform_out"
+          gold_out="$(docker run --rm \
+            --name "cfi-ci-gold-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            --network none \
+            --read-only \
+            --tmpfs /tmp \
+            --user 10001:10001 \
+            -e CFI_DATA_ROOT=/data \
+            -v "${volume}:/data" \
+            "$tag" \
+            gold --source-id synthetic.trips.v1 --dataset-version v1 --input-sha256 "$sha" --run-id gold-001)"
+          printf '%s\n' "$gold_out"
+          printf '%s\n' "$gold_out" | python3 -c 'import json,sys; body=json.load(sys.stdin); assert body["trip_count"]==2; assert body["total_distance_km"]=="12.750"; assert body["average_duration_seconds"]=="1500.000000"; assert body["rejected_count"]==0'
+          docker run -d \
+            --name "$api" \
+            --read-only \
+            --tmpfs /tmp \
+            --user 10001:10001 \
+            -e CFI_DATA_ROOT=/data \
+            -e CFI_HTTP_HOST=0.0.0.0 \
+            -e CFI_HTTP_PORT=8000 \
+            -v "${volume}:/data:ro" \
+            -p 127.0.0.1:8000:8000 \
+            "$tag" \
+            serve
+          live_ok=0
+          for _ in $(seq 1 30); do
+            code="$(curl -sS -o /tmp/cfi-live.json -w '%{http_code}' http://127.0.0.1:8000/health/live || true)"
+            if [ "$code" = "200" ]; then
+              live_ok=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$live_ok" != "1" ]; then
+            docker logs "$api"
+            echo "API did not become live" >&2
+            exit 1
+          fi
+          python3 -c 'import json; assert json.load(open("/tmp/cfi-live.json"))=={"status":"live"}'
+          summary_code="$(curl -sS -o /tmp/cfi-summary.json -w '%{http_code}' 'http://127.0.0.1:8000/v1/trips/summary?source_id=synthetic.trips.v1&dataset_version=v1')"
+          test "$summary_code" = "200"
+          python3 -c 'import json; body=json.load(open("/tmp/cfi-summary.json")); assert body["trip_count"]==2; assert body["total_distance_km"]=="12.750"; assert body["average_duration_seconds"]=="1500.000000"; assert body["rejected_count"]==0; print(body["trip_count"], body["total_distance_km"], body["average_duration_seconds"], body["rejected_count"])'
+
+      - name: Cleanup
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$CFI_RUN_ID" in
+            ''|*[!0-9]*) echo "run id is not numeric" >&2; exit 1 ;;
+          esac
+          case "$CFI_RUN_ATTEMPT" in
+            ''|*[!0-9]*) echo "run attempt is not numeric" >&2; exit 1 ;;
+          esac
+          volume="cfi-ci-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}"
+          for name in \
+            "cfi-ci-copy-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            "cfi-ci-id-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            "cfi-ci-ingest-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            "cfi-ci-transform-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            "cfi-ci-gold-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}" \
+            "cfi-ci-api-${CFI_RUN_ID}-${CFI_RUN_ATTEMPT}"
+          do
+            if docker container inspect "$name" >/dev/null 2>&1; then
+              docker rm -f "$name"
+            fi
+          done
+          if docker volume inspect "$volume" >/dev/null 2>&1; then
+            docker volume rm "$volume"
+          fi

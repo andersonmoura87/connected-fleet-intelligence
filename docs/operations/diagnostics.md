@@ -105,3 +105,17 @@ Supported action. Restore read access and run `cfi diagnose` again. Restore writ
 Verification. Diagnose exits 0 and reports states. A publication is attempted only after that report says the supported action is a publication command.
 
 Stop. Stop while the volume remains read-only or unauthorized. Do not copy the tree to a writable disk and publish it as if it were the same volume.
+
+## Interrupted publication
+
+Symptom. A `cfi ingest`, `cfi transform`, or `cfi gold` process ends without a JSON result. `cfi diagnose` may show a sealed artifact, an absent artifact, or a Gold snapshot with no pointer.
+
+Evidence. The final directory is either absent or complete. A file under `.incoming` may remain. A lock marker under `bronze/locks`, `silver/locks`, or `gold/locks` may remain. The operating-system lock is released when the process exits. `cfi diagnose` does not remove either residue.
+
+Diagnosis. The process stopped before or after the exclusive rename, or after the snapshot rename and before the pointer replace. A leftover temporary directory is not a published dataset and it is not proof that a published directory is corrupt. A successful command, including one that synced a file before renaming it, is not evidence the bytes would survive power loss. Directory sync failure is ignored and is not a durability claim.
+
+Supported action. Run `cfi diagnose` for the same identity. When the report shows an absent stage and the previous stage is intact, run that stage's command again with the same identity. When a Gold snapshot is intact, Silver is intact, and the pointer is absent, run `cfi gold` again with the same checksum. When the pointer already names that snapshot, the same command is a no-op.
+
+Verification. Published bytes do not change on replay. A new pointer is created only by `cfi gold` when the pointer was absent. The summary route agrees with the pointer. Temporary files and lock markers may still be present.
+
+Stop. Stop when diagnose reports an incomplete or divergent artifact, or when the pointer is invalid. Stop when the command exits 3 or 4. Stop when the process prints a traceback instead of a JSON result: a full disk or an I/O error during a temporary write is not currently returned as `storage_error`, and that traceback does not prove corruption. Do not delete a lock marker, do not delete `.incoming` as a repair, and do not edit `current.json`.

@@ -21,10 +21,16 @@ if TYPE_CHECKING:
     from cfi.application.ingest import IngestSettings
 
 
+_PARSE_ARGV: list[str] = []
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message: str) -> Never:
         del message
-        _emit_error("usage", 2, dry_run=False)
+        if _first_command(_PARSE_ARGV) == "diagnose":
+            _write_diagnose_rejection("usage", 2)
+        else:
+            _emit_error("usage", 2, dry_run=False)
         raise SystemExit(2)
 
 
@@ -36,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     if isinstance(stage, str):
         emit({**context, "event_name": "command_started", "status": "started"})
     try:
-        code, terminal = _dispatch(argv)
+        code, terminal = _dispatch(arguments)
     except Exception:
         if isinstance(stage, str):
             emit(
@@ -60,7 +66,9 @@ def main(argv: list[str] | None = None) -> int:
     return code
 
 
-def _dispatch(argv: list[str] | None) -> tuple[int, dict[str, object]]:
+def _dispatch(argv: list[str]) -> tuple[int, dict[str, object]]:
+    global _PARSE_ARGV
+    _PARSE_ARGV = argv
     parser = _Parser(prog="cfi")
     subcommands = parser.add_subparsers(dest="command", required=True)
     ingest_parser = subcommands.add_parser("ingest")
@@ -81,15 +89,23 @@ def _dispatch(argv: list[str] | None) -> tuple[int, dict[str, object]]:
     gold_parser.add_argument("--run-id", required=True)
     gold_parser.add_argument("--dry-run", action="store_true")
     gold_parser.add_argument("--promote", action="store_true")
+    diagnose_parser = subcommands.add_parser("diagnose")
+    diagnose_parser.add_argument("--source-id", required=True)
+    diagnose_parser.add_argument("--dataset-version", required=True)
+    diagnose_parser.add_argument("--input-sha256")
     subcommands.add_parser("serve")
     try:
         args = parser.parse_args(argv)
     except SystemExit as exc:
         code = 2 if exc.code is None else int(exc.code)
+        if _first_command(argv) == "diagnose":
+            return code, {"error_code": "usage", "exit_code": code, "status": "rejected"}
         return code, _rejected("usage", code, dry_run=False)
 
     if args.command == "serve":
         return _serve()
+    if args.command == "diagnose":
+        return _diagnose(args)
     if args.command not in {"ingest", "transform", "gold"}:
         _emit_error("usage", 2, dry_run=False)
         return 2, _rejected("usage", 2, dry_run=False)
@@ -156,6 +172,28 @@ def _dispatch(argv: list[str] | None) -> tuple[int, dict[str, object]]:
     return 0, _terminal(payload, 0)
 
 
+def _diagnose(args: argparse.Namespace) -> tuple[int, dict[str, object]]:
+    from cfi.application.diagnose import DiagnoseFailure, diagnose
+
+    root = Path(os.environ.get("CFI_DATA_ROOT", "data"))
+    try:
+        payload = diagnose(
+            root,
+            args.source_id,
+            args.dataset_version,
+            args.input_sha256,
+        )
+    except DiagnoseFailure as exc:
+        _write_diagnose_rejection(exc.code, exc.exit_code)
+        return exc.exit_code, {
+            "error_code": exc.code,
+            "exit_code": exc.exit_code,
+            "status": "rejected",
+        }
+    sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
+    return 0, {"exit_code": 0, "status": "succeeded"}
+
+
 def _serve() -> tuple[int, dict[str, object]]:
     try:
         settings = serve_from_env()
@@ -173,7 +211,7 @@ def _preview(argv: list[str]) -> dict[str, object]:
     index = 0
     while index < len(argv):
         token = argv[index]
-        if stage is None and token in {"ingest", "transform", "gold", "serve"}:
+        if stage is None and token in {"diagnose", "gold", "ingest", "serve", "transform"}:
             stage = token
             index += 1
             continue
@@ -187,7 +225,9 @@ def _preview(argv: list[str]) -> dict[str, object]:
             index += consumed
             continue
         index += 1
-    context: dict[str, object] = {"dry_run": dry_run}
+    context: dict[str, object] = {}
+    if stage != "diagnose":
+        context["dry_run"] = dry_run
     if stage is not None:
         context["stage"] = stage
     for key in ("dataset_version", "run_id", "source_id"):
@@ -283,6 +323,20 @@ def _settings_from_env() -> "IngestSettings":
         max_input_bytes=max_bytes,
         lock_timeout_seconds=timeout,
     )
+
+
+def _first_command(argv: list[str]) -> str | None:
+    for token in argv:
+        if token == "--":
+            return None
+        if not token.startswith("-"):
+            return token
+    return None
+
+
+def _write_diagnose_rejection(code: str, exit_code: int) -> None:
+    payload = {"code": code, "exit_code": exit_code, "status": "rejected"}
+    sys.stdout.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def _emit_error(code: str, exit_code: int, *, dry_run: bool) -> None:

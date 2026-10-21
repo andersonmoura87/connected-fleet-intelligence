@@ -20,6 +20,7 @@ Present in the tree:
 - OPS-001: a Linux container image definition and `cfi serve`.
 - OPS-002: a GitHub Actions workflow for quality, tests, and a Linux container smoke test. That workflow has not been executed on GitHub.
 - OPS-003: one JSON operational event per command boundary and per completed HTTP request, written to stderr. There is no metrics endpoint and no external collector.
+- OPS-004: `cfi diagnose` reads one publication identity and writes nothing. Recovery of a durable Gold snapshot still uses `cfi gold`. See `docs/operations/diagnostics.md`.
 
 The image has not been built or run in this repository's recorded evidence: the Docker engine was not available. This is not a production platform.
 
@@ -52,6 +53,20 @@ The command opens `silver/generations/{storage_key}/` and does not read Bronze. 
 DuckDB reads the two Parquet files. The totals are Python decimal arithmetic, not a SQL average. `trip_count` is the number of Silver rows. `total_distance_km` is their distance sum at scale 3. `average_duration_seconds` is the half-even mean of durations in microseconds, written with six decimal places. It is null when `trip_count` is 0. `rejected_count` is the Silver `quarantine_row_count`. `duplicate_count` is not a weight.
 
 One pointer, `gold/published/{pointer_key}/current.json`, exists per `(source_id, dataset_version)`. The first intact publication creates it. `--promote` replaces an intact pointer that names a different intact snapshot. `--promote` does not repair a corrupt pointer, a missing snapshot, or a hash mismatch. `--dry-run` returns the decision and writes nothing.
+
+A later `cfi gold` for the same identity and checksum does not rewrite a sealed snapshot. If that snapshot is intact and `current.json` is absent, the existing publication protocol creates the pointer. If the pointer already names that snapshot, the command is a no-op.
+
+## Diagnosis
+
+```text
+cfi diagnose --source-id <id> --dataset-version <version> [--input-sha256 <sha256>]
+```
+
+The command reads one identity and writes nothing. It does not create a data root, directory, lock, or pointer, and it does not open DuckDB. It does not publish or promote. Exit 0 and `status` `reported` mean the inspection finished, including when an artifact is absent or invalid. Exit 2 is an invalid argument. Exit 4 is a path or storage failure, and then the report is not written. Absence and hash disagreement are fields in the report, not exit codes.
+
+`bronze_state` is `absent`, `intact`, `incomplete`, or `mismatch`. `pointer_state` is `absent`, `intact`, `pointer_invalid`, `snapshot_absent`, `integrity_mismatch`, or `schema_mismatch`. `current.json` is read once. The command does not claim one transactional view of Bronze, Silver, and Gold together.
+
+`input_sha256`, `silver_state`, and `snapshot_state` appear only when the checksum flag is present. Those states are `absent`, `intact`, `incomplete`, or `mismatch`. The snapshot check compares `summary.json` with `manifest.json`. It does not recompute the aggregate. The operational procedure for each state is in `docs/operations/diagnostics.md`.
 
 ## Read API
 
@@ -89,13 +104,13 @@ Error bodies are `{"code": "<code>"}`. They do not include a filesystem path or 
 
 Stdout remains the machine result: one JSON object for `cfi ingest`, `cfi transform`, and `cfi gold`, and the HTTP body for the API. Stderr is a JSON Lines log for operators. The process does not open a log file. These lines are not distributed traces, and they are not a latency percentile or an SLO.
 
-Each line has `timestamp` (UTC, `Z` suffix), `event_name`, `stage`, and `status`. `duration_ms` is whole milliseconds for one execution, measured with `perf_counter_ns`. It is one sample. A batch command writes `command_started` and then `command_finished`. `cfi serve` writes one `http_request` when a response finishes. `stage` is `ingest`, `transform`, `gold`, or `serve`. `status` is `started`, `succeeded`, `noop`, `rejected`, or `partial`.
+Each line has `timestamp` (UTC, `Z` suffix), `event_name`, `stage`, and `status`. `duration_ms` is whole milliseconds for one execution, measured with `perf_counter_ns`. It is one sample. A batch command writes `command_started` and then `command_finished`. `cfi serve` writes one `http_request` when a response finishes. `stage` is `ingest`, `transform`, `gold`, `serve`, or `diagnose`. `status` is `started`, `succeeded`, `noop`, `rejected`, or `partial`.
 
 Optional fields appear only when that execution already knows them: `run_id`, `source_id`, `dataset_version`, `duration_ms`, `error_code`, `exit_code`, `dry_run`, record counts already present on the result, `snapshot_state`, `pointer_state`, `snapshot_durable`, `pointer_replaced`, `route`, and `http_status`. An unknown HTTP path uses the route `unmatched`. The event omits trip payloads, coordinates, absolute paths, the data root, exception text, stack traces, environment variables, secrets, the query string, and `input_sha256`.
 
 `duration_ms` does not establish a service level. Counts are the integers the command already computed. `partial` means a Gold snapshot is durable and the pointer was not replaced. HTTP 200 on `/v1/trips/summary` means that pointer read succeeded. `GET /health/live` does not consult Gold. There is no `/metrics` endpoint and no collector in this process.
 
-`status` `succeeded` with `dry_run` `true` means the command finished its decision and wrote nothing. Stdout is unchanged: an ingest or transform dry-run can still report `status` `published` and `dry_run` `true` while the data root stays absent. That pair is not a stored publication. Exit codes stay the same.
+`status` `succeeded` with `dry_run` `true` means the command finished its decision and wrote nothing. Stdout is unchanged: an ingest or transform dry-run can still report `status` `published` and `dry_run` `true` while the data root stays absent. That pair is not a stored publication. Exit codes stay the same. `cfi diagnose` has no dry-run. Its event status `succeeded` means the inspection finished. The stdout field `status` `reported` is the machine result and can still describe an absent or invalid artifact.
 
 Batch commands write only application events to stderr. `cfi serve` also writes Uvicorn lifecycle lines to stderr through the standard-library logger. A lifecycle line has `logger` `uvicorn` and `event`. It does not have `event_name`, so it is not an application event. The listening line does not include the bind address or the port. Exception text, paths, and query strings are omitted. A server failure remains visible as `server_error`, `startup_failed`, or `shutdown_failed`, with `error_type` and `errno` when the exception has them. Access logs stay off. One request still produces one `http_request` line.
 

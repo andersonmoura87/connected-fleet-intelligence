@@ -16,7 +16,7 @@ from typing import TextIO
 from cfi.domain.identifiers import validate_identifier
 
 EVENT_NAMES = frozenset({"command_started", "command_finished", "http_request"})
-STAGES = frozenset({"ingest", "transform", "gold", "serve"})
+STAGES = frozenset({"diagnose", "gold", "ingest", "serve", "transform"})
 STATUSES = frozenset({"started", "succeeded", "noop", "rejected", "partial"})
 _IDENTIFIER_FIELDS = frozenset({"run_id", "source_id", "dataset_version"})
 _COUNT_FIELDS = frozenset(

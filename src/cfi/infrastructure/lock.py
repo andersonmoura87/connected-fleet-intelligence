@@ -56,7 +56,7 @@ def source_lock(path: Path, timeout_seconds: float) -> Iterator[int]:
     try:
         fd = os.open(path, flags)
     except OSError as exc:
-        if exc.errno == errno.EROFS:
+        if exc.errno == errno.EROFS or exc.errno == errno.EIO:
             raise LockPathDenied() from exc
         raise
     acquired = False

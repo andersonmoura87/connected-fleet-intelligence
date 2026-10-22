@@ -2,6 +2,8 @@
 
 Status: Bronze ingestion, Silver transformation, Gold publication, and the read-only FastAPI routes are implemented. Bronze, Silver, and Gold were exercised on Windows 10.0.26200 (Python 3.12.15) and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3, dependencies from `uv.lock`, DuckDB 1.5.6). The HTTP routes are called in-process with `TestClient`. One integration test runs `cfi ingest`, `cfi transform`, and `cfi gold` through the CLI and then reads the summary with `TestClient`. The command sequence is in the README. These runs are local evidence, not a production certification. The Docker engine was not running. There is no listening server.
 
+**Later update.** Those two sentences record this specification as it stood then. `cfi serve` was implemented afterward. The container was later built and exercised in GitHub Actions. Workflow `ci`, run `39699852347`, passed on commit `631e65e6b88fd71c4f2c74727dc6974c58181804`. That run is not continuous operation and it is not production readiness. The README records the job names and the current limits.
+
 ## Goal
 From a small pinned synthetic trip fixture, validate records, publish immutable Bronze and typed Silver, compute a Gold summary, and serve it through a read-only FastAPI endpoint. A licensed public sample is a later, separate input. No network access is required for tests or dry run.
 

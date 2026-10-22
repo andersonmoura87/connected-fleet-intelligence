@@ -18,13 +18,13 @@ Present in the tree:
 - INC-006: in-process read-only FastAPI routes over a published Gold pointer.
 - INC-007: one CLI-to-HTTP integration test and the reproduction steps below.
 - OPS-001: a Linux container image definition and `cfi serve`.
-- OPS-002: a GitHub Actions workflow for quality, tests, and a Linux container smoke test. That workflow has not been executed on GitHub.
+- OPS-002: a GitHub Actions workflow for quality, tests, and a Linux container smoke test. On commit `631e65e6b88fd71c4f2c74727dc6974c58181804`, workflow run `39699852347` completed with `quality`, `test`, and `container` successful. That record is one push to `main`. It is not continuous production operation.
 - OPS-003: one JSON operational event per command boundary and per completed HTTP request, written to stderr. There is no metrics endpoint and no external collector.
 - OPS-004: `cfi diagnose` reads one publication identity and writes nothing. Recovery of a durable Gold snapshot still uses `cfi gold`. See `docs/operations/diagnostics.md`.
+- OPS-005: publication behavior when a process ends before the exclusive rename, and when it ends after the artifact is visible. Replay does not rewrite a sealed artifact. A directory under `.incoming` and a lock marker may remain. This is not a power-loss test.
+- OPS-006: ENOSPC, EIO, EACCES, and EROFS on temporary directory creation, a write open, a write, or a file sync are `storage_error` with exit 4. DuckDB errors while writing Parquet are outside that classification. Directory sync failure is still ignored.
 
-The image has not been built or run in this repository's recorded evidence: the Docker engine was not available. This is not a production platform.
-
-INC-003, INC-004, and INC-005 were exercised on Windows 10.0.26200 with Python 3.12.15, and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3) using the versions pinned in `uv.lock`. DuckDB 1.5.6 reads and writes the Parquet files. The Docker engine was not running, so there is no container evidence. Details and limits are in the vertical slice.
+This is not a production platform. INC-003, INC-004, and INC-005 were exercised on Windows 10.0.26200 with Python 3.12.15, and on WSL2 Linux (kernel `5.15.167.4-microsoft-standard-WSL2`, ext4, Python 3.12.3) using the versions pinned in `uv.lock`. DuckDB 1.5.6 reads and writes the Parquet files. The container evidence is the `container` job of run `39699852347`, described below. Host limits for that slice are in the vertical slice. That document still says the Docker engine was not running and that there is no listening server; those two sentences predate `cfi serve` and this CI run. The diagnostic procedure is `docs/operations/diagnostics.md`.
 
 ## Bronze ingest
 
@@ -67,6 +67,12 @@ The command reads one identity and writes nothing. It does not create a data roo
 `bronze_state` is `absent`, `intact`, `incomplete`, or `mismatch`. `pointer_state` is `absent`, `intact`, `pointer_invalid`, `snapshot_absent`, `integrity_mismatch`, or `schema_mismatch`. `current.json` is read once. The command does not claim one transactional view of Bronze, Silver, and Gold together.
 
 `input_sha256`, `silver_state`, and `snapshot_state` appear only when the checksum flag is present. Those states are `absent`, `intact`, `incomplete`, or `mismatch`. The snapshot check compares `summary.json` with `manifest.json`. It does not recompute the aggregate. The operational procedure for each state is in `docs/operations/diagnostics.md`.
+
+## Interrupted publication and storage errors
+
+If a batch process ends without a JSON result, the final directory is either absent or complete. A directory under `.incoming` and a lock marker may remain. The operating-system lock is released when the process exits. `cfi diagnose` does not delete either residue. Run the same stage again when the previous stage is intact. When a Gold snapshot and its Silver generation are intact and the pointer is absent, run `cfi gold` again with the same checksum. The snapshot bytes stay in place.
+
+ENOSPC, EIO, EACCES, and EROFS while creating a temporary directory, opening a file for write, writing it, or syncing that file return `storage_error` and exit 4. Ingest and transform report `rejected` and leave the final directory absent. Gold reports `rejected` with `snapshot_durable` false when the snapshot was not published. After the snapshot exists, a failure while writing or replacing the pointer is `partial`, exit 4, with `snapshot_durable` true and `pointer_replaced` false. Another `cfi gold` creates the missing pointer and does not rewrite the snapshot. This classification does not rebuild a snapshot or replace an invalid pointer. A DuckDB error while writing Parquet is not returned as `storage_error`. A directory sync failure is ignored and is not evidence the bytes would survive power loss. The procedure is `docs/operations/diagnostics.md`.
 
 ## Read API
 
@@ -166,7 +172,7 @@ Remove the temporary directory when finished. PowerShell: `Remove-Item -Recurse 
 
 The image is `linux/amd64`. The base is the official glibc image `python:3.12-slim`, pinned to the amd64 manifest `sha256:2b4f19dae3a777dfc3b76730bda1e82e1f66ab2a2686fa93ca78edbfb4f04ffe`. That digest was read from the Docker registry index `sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1` for the tag `3.12-slim`. The builder copies uv `0.13.1` at `sha256:9a853e40f2eb00f980d265a84fba919dc38ff17750197e7f13c055e4e2f12edd` and runs `uv sync --frozen --no-dev --no-editable`. Development tools are not in the runtime stage. The process user is `cfi`, uid `10001`, gid `10001`. Application code lives under `/opt/cfi`. Data lives only at `/data`.
 
-These commands are the lab procedure. They were not executed here because the Docker engine was unavailable. They are not a production deployment, and they do not show durability across power loss.
+These commands are a local lab procedure. They are not a production deployment, and they do not show durability across power loss. The recorded container execution is workflow run `39699852347` on commit `631e65e6b88fd71c4f2c74727dc6974c58181804`. That `container` job builds this `linux/amd64` image, runs synthetic ingest, transform, and gold, then checks `GET /health/live` (`{"status":"live"}`) and `GET /v1/trips/summary` (`trip_count` 2, `total_distance_km` `12.750`, `average_duration_seconds` `1500.000000`, `rejected_count` 0). The lab commands below use a different image tag and volume name from that job.
 
 ```text
 docker build --platform linux/amd64 -t cfi:0.1.0a0 .
@@ -194,7 +200,7 @@ The API is a different container. It mounts `/data` read-only and publishes the 
 docker run --rm --name cfi-lab-api --read-only --tmpfs /tmp --memory 256m --cpus 1 --user 10001:10001 -e CFI_DATA_ROOT=/data -e CFI_HTTP_HOST=0.0.0.0 -e CFI_HTTP_PORT=8000 -v cfi-lab-data:/data:ro -p 127.0.0.1:8000:8000 cfi:0.1.0a0 serve
 ```
 
-The liveness check is `GET /health/live`. It does not read Gold. The procedure expects HTTP 200 `{"status":"live"}` when the process is up, including before publication. The summary route then expects HTTP 404 `not_published`. After the synthetic publication it expects HTTP 200 with 2 trips, `12.750`, `1500.000000`, and 0 rejected. Those HTTP results were not executed in this increment. `docker stop cfi-lab-api` sends SIGTERM. Uvicorn stops listening and then re-raises that signal, so the process status is the signal. The API does not rewrite the volume. Do not use the root user or mode `777` to fix a volume. A read-only data mount on a batch command is expected to fail the command and publish nothing.
+The liveness check is `GET /health/live`. It does not read Gold. The procedure expects HTTP 200 `{"status":"live"}` when the process is up, including before publication. The summary route then expects HTTP 404 `not_published`. After the synthetic publication it expects HTTP 200 with 2 trips, `12.750`, `1500.000000`, and 0 rejected. The CI `container` job executed those two checks after publication. `docker stop cfi-lab-api` sends SIGTERM. Uvicorn stops listening and then re-raises that signal, so the process status is the signal. The API does not rewrite the volume. Do not use the root user or mode `777` to fix a volume. A read-only data mount on a batch command is expected to fail the command and publish nothing.
 
 Cleanup of this lab only:
 
@@ -212,7 +218,7 @@ docker rmi cfi:0.1.0a0
 - `test` runs `uv sync --frozen` and `uv run pytest -q`.
 - `container` builds the `linux/amd64` image and runs ingest, transform, and gold on a volume named for that run. It then requests `GET /health/live` and `GET /v1/trips/summary`.
 
-A non-zero exit fails the job. The workflow does not retry a failed test. Host jobs resolve dependencies with `uv sync --frozen` from `uv.lock`. The uv download cache is off, because saving it would require an Actions write permission. Ubuntu does not create Windows directory junctions, so those tests skip. A Windows run remains local evidence. This section describes the workflow file. It is not a record of a completed GitHub Actions run.
+A non-zero exit fails the job. The workflow does not retry a failed test. Host jobs resolve dependencies with `uv sync --frozen` from `uv.lock`. The uv download cache is off, because saving it would require an Actions write permission. Ubuntu does not create Windows directory junctions, so those tests skip. A Windows run remains local evidence. On commit `631e65e6b88fd71c4f2c74727dc6974c58181804`, workflow run `39699852347` finished with `quality`, `test`, and `container` successful. That record is one completed run. It does not describe a production service, a schedule, or any later run.
 
 ## Toolchain
 

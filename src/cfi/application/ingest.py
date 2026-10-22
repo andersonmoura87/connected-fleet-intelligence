@@ -11,7 +11,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from cfi.application.errors import integrity, lock_unavailable, storage, usage
+from cfi.application.errors import IngestFailure, integrity, lock_unavailable, storage, usage
 from cfi.domain.bronze import (
     BronzeManifest,
     IngestAction,
@@ -29,7 +29,7 @@ from cfi.infrastructure.storage import (
     hash_file,
     is_regular_file,
     is_reparse_point,
-    remove_tree_nofollow,
+    remove_unpublished,
     rename_exclusive,
     write_bytes_fsync,
 )
@@ -191,6 +191,8 @@ def _publish(
     incoming_root = root / "bronze" / ".incoming"
     temp = incoming_root / f"{run_id}-{secrets.token_hex(8)}"
     published = False
+    result: IngestResult | None = None
+    primary: Exception | None = None
     try:
         assert_tree_has_no_reparse(root, final.parent)
         create_directory(temp)
@@ -228,7 +230,7 @@ def _publish(
             action = decide(raced.kind, raced.sha256, copied_sha)
             if action is IngestAction.PUBLISH:
                 raise integrity("integrity_incomplete") from None
-            return _from_action(
+            result = _from_action(
                 action,
                 raced,
                 source_id,
@@ -243,33 +245,38 @@ def _publish(
             if exc.errno == errno.EXDEV or winerror == 17:
                 raise storage("cross_device") from exc
             raise storage("storage_error") from exc
-        published = True
-        if hooks.after_rename is not None:
-            hooks.after_rename()
-        sealed = _observe(final, source_id, dataset_version, settings.max_input_bytes)
-        if sealed.kind is not ObservationKind.SEALED or sealed.sha256 != copied_sha:
-            raise integrity("integrity_mismatch")
-        fsync_directory(final.parent)
-        return IngestResult(
-            status="published",
-            code="published",
-            source_id=source_id,
-            dataset_version=dataset_version,
-            input_sha256=copied_sha,
-            input_size_bytes=copied_size,
-            run_id=run_id,
-            observed_run_id=run_id,
-            dry_run=False,
-        )
+        else:
+            published = True
+            if hooks.after_rename is not None:
+                hooks.after_rename()
+            sealed = _observe(final, source_id, dataset_version, settings.max_input_bytes)
+            if sealed.kind is not ObservationKind.SEALED or sealed.sha256 != copied_sha:
+                raise integrity("integrity_mismatch")
+            fsync_directory(final.parent)
+            result = IngestResult(
+                status="published",
+                code="published",
+                source_id=source_id,
+                dataset_version=dataset_version,
+                input_sha256=copied_sha,
+                input_size_bytes=copied_size,
+                run_id=run_id,
+                observed_run_id=run_id,
+                dry_run=False,
+            )
     except StorageFailure as exc:
-        if exc.code == "input_too_large":
-            raise usage("input_too_large") from exc
-        if exc.code in {"reparse_point", "path_escape"}:
-            raise storage(exc.code) from exc
-        raise storage("storage_error") from exc
-    finally:
-        if not published and temp.exists():
-            remove_tree_nofollow(temp, incoming_root)
+        primary = _failure_from_storage(exc)
+    except Exception as exc:
+        primary = exc
+    if not published:
+        primary = remove_unpublished(temp, incoming_root, primary, decided=result is not None)
+    if isinstance(primary, StorageFailure):
+        primary = _failure_from_storage(primary)
+    if primary is not None:
+        raise primary
+    if result is None:
+        raise RuntimeError("ingest publish produced no result")
+    return result
 
 
 def _finish_decision(
@@ -446,6 +453,17 @@ def _final_dir(root: Path, source_id: str, dataset_version: str) -> Path:
     except StorageFailure as exc:
         raise storage(_storage_code(exc.code)) from exc
     return path
+
+
+def _failure_from_storage(exc: StorageFailure) -> IngestFailure:
+    try:
+        if exc.code == "input_too_large":
+            raise usage("input_too_large") from exc
+        if exc.code in {"reparse_point", "path_escape"}:
+            raise storage(exc.code) from exc
+        raise storage("storage_error") from exc
+    except IngestFailure as mapped:
+        return mapped
 
 
 def _storage_code(code: str) -> str:

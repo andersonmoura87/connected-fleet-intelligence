@@ -101,21 +101,40 @@ def test_storage_io_while_creating_the_lock_directory(
         monkeypatch.undo()
 
 
-def test_unexpected_lock_errors_stay_unclassified(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+def test_eio_while_opening_the_lock(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     def denied(path: str | Path, flags: int, mode: int = 0o777) -> int:
         del path, flags, mode
         raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr("cfi.infrastructure.lock.os.open", denied)
+    yielded: list[int] = []
+    try:
+        with source_lock(tmp_path / "locks" / "source=v1.lock", 1) as fd:
+            yielded.append(fd)
+    except LockPathDenied as exc:
+        assert exc.code == "storage_error"
+        assert isinstance(exc.__cause__, OSError)
+        assert exc.__cause__.errno == errno.EIO
+    else:
+        raise AssertionError("EIO on open was not classified")
+    assert yielded == []
+
+
+def test_eperm_on_open_stays_unclassified(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    def denied(path: str | Path, flags: int, mode: int = 0o777) -> int:
+        del path, flags, mode
+        raise OSError(errno.EPERM, "Operation not permitted")
 
     monkeypatch.setattr("cfi.infrastructure.lock.os.open", denied)
     try:
         with source_lock(tmp_path / "locks" / "source=v1.lock", 1):
             raise AssertionError("lock acquired")
     except LockPathDenied:
-        raise AssertionError("unexpected errno became storage_error") from None
+        raise AssertionError("open EPERM was classified") from None
     except OSError as exc:
-        assert exc.errno == errno.EIO
+        assert exc.errno == errno.EPERM
     else:
-        raise AssertionError("unexpected errno was ignored")
+        raise AssertionError("open EPERM was ignored")
 
 
 def test_eacces_on_open_is_not_a_storage_denial(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
@@ -199,6 +218,46 @@ def test_cli_reports_lock_erofs_without_publishing(
     }
     assert sealed == _sealed(root, "synthetic.trips.v1")
     assert not (root / "bronze" / "sources" / "synthetic.trips.ro").exists()
+
+
+def test_cli_reports_lock_open_eio_without_publishing(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+    capsys: object,
+) -> None:
+    root, sealed = _published(tmp_path, monkeypatch, capsys)
+
+    def denied(path: str | Path, flags: int, mode: int = 0o777) -> int:
+        text = os.fsdecode(path)
+        if text.endswith("synthetic.trips.io=v1.lock"):
+            raise OSError(errno.EIO, "Input/output error", text)
+        return os.open(path, flags, mode)
+
+    monkeypatch.setattr("cfi.infrastructure.lock.os.open", denied)
+    code = main(
+        [
+            "ingest",
+            "--input",
+            str(tmp_path / "input.bin"),
+            "--source-id",
+            "synthetic.trips.io",
+            "--dataset-version",
+            "v1",
+            "--run-id",
+            "bronze-io",
+        ]
+    )
+    captured = capsys.readouterr()  # type: ignore[attr-defined]
+    assert code == 4
+    _assert_storage_events(captured.err, root, tmp_path)
+    assert json.loads(captured.out) == {
+        "code": "storage_error",
+        "dry_run": False,
+        "exit_code": 4,
+        "status": "rejected",
+    }
+    assert sealed == _sealed(root, "synthetic.trips.v1")
+    assert not (root / "bronze" / "sources" / "synthetic.trips.io").exists()
 
 
 def test_cli_reports_publication_eacces_without_replacing_artifacts(

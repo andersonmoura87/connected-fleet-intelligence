@@ -1,13 +1,16 @@
 """Observed behavior under injected I/O errors and abrupt process death.
 
-ENOSPC and EIO on a temporary write or directory are raised as OSError. That is
-the current behavior, not a desired operator contract. Rename and pointer
-replacement classify those errno values. Nothing here claims durability after
-power loss.
+ENOSPC, EIO, EACCES, and EROFS on a temporary write, file sync, or temporary
+directory become storage_error. Other errno values stay unclassified. Rename
+and pointer replacement keep their existing codes. Nothing here claims
+durability after power loss.
 """
 
 import errno
+import hashlib
+import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
@@ -17,14 +20,18 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+import cfi.application.gold as gold_module
+import cfi.infrastructure.storage as storage_module
 from cfi.application.diagnose import diagnose
 from cfi.application.errors import IngestFailure
 from cfi.application.gold import GoldFailure, GoldRequest, GoldSettings, gold
-from cfi.application.ingest import IngestRequest, IngestSettings, ingest
+from cfi.application.ingest import IngestHooks, IngestRequest, IngestSettings, ingest
 from cfi.application.transform import TransformRequest, TransformSettings, transform
 from cfi.domain.gold import gold_storage_key_for, pointer_key_for
 from cfi.domain.silver import storage_key_for
 from cfi.infrastructure.lock import lock_path_for, source_lock
+from cfi.infrastructure.storage import StorageFailure
+from cfi.interfaces.cli import main
 from cfi.interfaces.http import create_app
 
 FIXTURE = Path("tests/fixtures/synthetic/trips_valid.jsonl")
@@ -176,6 +183,18 @@ def _io_error(code: int) -> OSError:
     return OSError(code, os.strerror(code))
 
 
+def _cause_errno(exc: BaseException) -> int | None:
+    current: BaseException | None = exc
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        number = getattr(current, "errno", None)
+        if isinstance(number, int):
+            return number
+        current = current.__cause__
+    return None
+
+
 def _refuse_incoming_mkdir(real: object, code: int):
     def mkdir(self: Path, *args: object, **kwargs: object) -> None:
         if ".incoming" in self.as_posix():
@@ -278,13 +297,13 @@ def _summary(root: Path) -> tuple[int, dict[str, object]]:
 
 
 @pytest.mark.parametrize("code", _ERRNOS)
-def test_temporary_write_errors_stay_unclassified(
+def test_temporary_write_errors_are_storage_error_exit_4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
-    """FI-10. copy_hashed and write_bytes_fsync do not map ENOSPC or EIO."""
+    """FI-10. A temporary write of ENOSPC or EIO is storage_error and publishes nothing."""
 
     monkeypatch.setattr("cfi.infrastructure.storage.os.write", _refuse_storage_write(code))
-    with pytest.raises(OSError) as caught:
+    with pytest.raises(IngestFailure) as caught:
         ingest(
             IngestSettings(data_root=tmp_path),
             IngestRequest(
@@ -294,20 +313,21 @@ def test_temporary_write_errors_stay_unclassified(
                 run_id="bronze-001",
             ),
         )
-    assert caught.value.errno == code
-    assert not isinstance(caught.value, IngestFailure)
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert _cause_errno(caught.value) == code
     assert not _bronze(tmp_path).exists()
 
 
 @pytest.mark.parametrize("code", _ERRNOS)
-def test_bronze_temp_directory_errors_stay_unclassified(
+def test_bronze_temp_directory_errors_are_storage_error_exit_4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
-    """FI-10. create_directory maps EROFS and EACCES only."""
+    """FI-10. ENOSPC or EIO while creating a temporary directory is storage_error."""
 
     real = Path.mkdir
     monkeypatch.setattr(Path, "mkdir", _refuse_incoming_mkdir(real, code))
-    with pytest.raises(OSError) as caught:
+    with pytest.raises(IngestFailure) as caught:
         ingest(
             IngestSettings(data_root=tmp_path),
             IngestRequest(
@@ -317,39 +337,46 @@ def test_bronze_temp_directory_errors_stay_unclassified(
                 run_id="bronze-001",
             ),
         )
-    assert caught.value.errno == code
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert _cause_errno(caught.value) == code
     assert not _bronze(tmp_path).exists()
 
 
 @pytest.mark.parametrize("code", _ERRNOS)
-def test_gold_temp_directory_errors_stay_unclassified(
+def test_gold_temp_directory_errors_are_storage_error_exit_4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
-    """FI-10. The Gold snapshot temp directory uses Path.mkdir, not create_directory."""
+    """FI-10. ENOSPC or EIO before the snapshot rename rejects the publication."""
 
     sha = _prepare_silver(tmp_path)
     real = Path.mkdir
     monkeypatch.setattr(Path, "mkdir", _refuse_incoming_mkdir(real, code))
-    with pytest.raises(OSError) as caught:
+    with pytest.raises(GoldFailure) as caught:
         _gold(tmp_path, sha, "gold-001")
-    assert caught.value.errno == code
-    assert not isinstance(caught.value, GoldFailure)
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert caught.value.result.status == "rejected"
+    assert caught.value.result.snapshot_durable is False
+    assert caught.value.result.pointer_replaced is False
     assert not _snapshot(tmp_path, sha).exists()
     assert not _pointer(tmp_path).exists()
 
 
 @pytest.mark.parametrize("code", _ERRNOS)
-def test_silver_manifest_write_errors_stay_unclassified(
+def test_silver_manifest_write_errors_are_storage_error_exit_4(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
 ) -> None:
-    """FI-10. The Silver manifest write uses write_bytes_fsync."""
+    """FI-10. ENOSPC or EIO while writing the Silver manifest leaves the generation absent."""
 
     sha = _ingest(tmp_path)
     key = storage_key_for(SOURCE, VERSION, sha)
     monkeypatch.setattr("cfi.infrastructure.storage.os.write", _refuse_storage_write(code))
-    with pytest.raises(OSError) as caught:
+    with pytest.raises(IngestFailure) as caught:
         _transform(tmp_path)
-    assert caught.value.errno == code
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert _cause_errno(caught.value) == code
     assert not (tmp_path / "silver" / "generations" / key).exists()
     assert (_bronze(tmp_path) / "original").read_bytes() == _payload()
 
@@ -659,3 +686,271 @@ def test_http_erofs_is_storage_error_and_writes_nothing(
     assert body == {"code": "storage_error"}
     assert "Read-only" not in str(body)
     assert _files(tmp_path) == before
+
+
+@pytest.mark.parametrize("code", _ERRNOS)
+def test_file_fsync_errors_are_storage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """A file fsync failure is storage_error. Directory fsync stays best-effort."""
+
+    def fail(fd: int) -> None:
+        del fd
+        raise _io_error(code)
+
+    monkeypatch.setattr("cfi.infrastructure.storage.os.fsync", fail)
+    with pytest.raises(IngestFailure) as caught:
+        ingest(
+            IngestSettings(data_root=tmp_path),
+            IngestRequest(
+                input_path=_input(tmp_path),
+                source_id=SOURCE,
+                dataset_version=VERSION,
+                run_id="bronze-001",
+            ),
+        )
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert _cause_errno(caught.value) == code
+    assert not _bronze(tmp_path).exists()
+
+
+@pytest.mark.parametrize("code", _ERRNOS)
+def test_silver_file_fsync_errors_leave_bronze_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """ENOSPC or EIO from the Parquet file sync does not publish the generation."""
+
+    sha = _ingest(tmp_path)
+    key = storage_key_for(SOURCE, VERSION, sha)
+    bronze = (_bronze(tmp_path) / "original").read_bytes()
+
+    def fail(fd: int) -> None:
+        del fd
+        raise _io_error(code)
+
+    monkeypatch.setattr("cfi.infrastructure.storage.os.fsync", fail)
+    with pytest.raises(IngestFailure) as caught:
+        _transform(tmp_path)
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert not (tmp_path / "silver" / "generations" / key).exists()
+    assert (_bronze(tmp_path) / "original").read_bytes() == bronze
+
+
+@pytest.mark.parametrize("code", _ERRNOS)
+def test_pointer_write_errors_are_partial_and_replay_keeps_the_snapshot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int
+) -> None:
+    """A classified pointer write leaves the sealed snapshot in place."""
+
+    sha = _prepare_silver(tmp_path)
+    real_write = storage_module.write_bytes_fsync
+
+    def wrapped(path: Path, payload: bytes) -> None:
+        if "published" in path.parts:
+            monkeypatch.setattr("cfi.infrastructure.storage.os.write", _refuse_storage_write(code))
+        real_write(path, payload)
+
+    monkeypatch.setattr(gold_module, "write_bytes_fsync", wrapped)
+    with pytest.raises(GoldFailure) as caught:
+        _gold(tmp_path, sha, "gold-001")
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert caught.value.result.status == "partial"
+    assert caught.value.result.snapshot_durable is True
+    assert caught.value.result.pointer_replaced is False
+    summary = (_snapshot(tmp_path, sha) / "summary.json").read_bytes()
+    manifest = (_snapshot(tmp_path, sha) / "manifest.json").read_bytes()
+    assert not _pointer(tmp_path).exists()
+    monkeypatch.undo()
+    recovered = _gold(tmp_path, sha, "gold-002")
+    assert recovered.code == "published"
+    assert recovered.pointer_state == "pointer_created"
+    assert (_snapshot(tmp_path, sha) / "summary.json").read_bytes() == summary
+    assert (_snapshot(tmp_path, sha) / "manifest.json").read_bytes() == manifest
+
+
+def test_cleanup_failure_keeps_the_primary_storage_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Removal of the temporary must not replace the write error."""
+
+    def fail_remove(path: Path, ancestor: Path) -> None:
+        del path, ancestor
+        raise _io_error(errno.EIO)
+
+    monkeypatch.setattr("cfi.infrastructure.storage.os.write", _refuse_storage_write(errno.ENOSPC))
+    monkeypatch.setattr(storage_module, "remove_tree_nofollow", fail_remove)
+    with pytest.raises(IngestFailure) as caught:
+        ingest(
+            IngestSettings(data_root=tmp_path),
+            IngestRequest(
+                input_path=_input(tmp_path),
+                source_id=SOURCE,
+                dataset_version=VERSION,
+                run_id="bronze-001",
+            ),
+        )
+    assert caught.value.code == "storage_error"
+    assert caught.value.exit_code == 4
+    assert _cause_errno(caught.value) == errno.ENOSPC
+    assert not _bronze(tmp_path).exists()
+
+
+def test_cleanup_failure_keeps_a_decided_publication_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A common removal error does not turn a raced no-op into a storage failure."""
+
+    source = _input(tmp_path)
+    ingest(
+        IngestSettings(data_root=tmp_path),
+        IngestRequest(
+            input_path=source,
+            source_id=SOURCE,
+            dataset_version=VERSION,
+            run_id="bronze-001",
+        ),
+    )
+    final = _bronze(tmp_path)
+    sealed = (final / "original").read_bytes()
+    manifest = (final / "manifest.json").read_bytes()
+    shutil.rmtree(final)
+
+    def restore() -> None:
+        final.mkdir(parents=True)
+        (final / "original").write_bytes(sealed)
+        (final / "manifest.json").write_bytes(manifest)
+
+    def fail_remove(path: Path, ancestor: Path) -> None:
+        del path, ancestor
+        raise _io_error(errno.EIO)
+
+    monkeypatch.setattr(storage_module, "remove_tree_nofollow", fail_remove)
+    replay = ingest(
+        IngestSettings(data_root=tmp_path),
+        IngestRequest(
+            input_path=source,
+            source_id=SOURCE,
+            dataset_version=VERSION,
+            run_id="bronze-002",
+        ),
+        IngestHooks(before_rename=restore),
+    )
+    assert replay.status == "noop"
+    assert (final / "original").read_bytes() == sealed
+    assert (final / "manifest.json").read_bytes() == manifest
+
+
+def test_cleanup_security_error_is_not_discarded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """path_escape during removal replaces a decided result instead of disappearing."""
+
+    source = _input(tmp_path)
+    ingest(
+        IngestSettings(data_root=tmp_path),
+        IngestRequest(
+            input_path=source,
+            source_id=SOURCE,
+            dataset_version=VERSION,
+            run_id="bronze-001",
+        ),
+    )
+    final = _bronze(tmp_path)
+    sealed = (final / "original").read_bytes()
+    manifest = (final / "manifest.json").read_bytes()
+    shutil.rmtree(final)
+
+    def restore() -> None:
+        final.mkdir(parents=True)
+        (final / "original").write_bytes(sealed)
+        (final / "manifest.json").write_bytes(manifest)
+
+    def fail_remove(path: Path, ancestor: Path) -> None:
+        del path, ancestor
+        raise StorageFailure("path_escape")
+
+    monkeypatch.setattr(storage_module, "remove_tree_nofollow", fail_remove)
+    with pytest.raises(IngestFailure) as caught:
+        ingest(
+            IngestSettings(data_root=tmp_path),
+            IngestRequest(
+                input_path=source,
+                source_id=SOURCE,
+                dataset_version=VERSION,
+                run_id="bronze-002",
+            ),
+            IngestHooks(before_rename=restore),
+        )
+    assert caught.value.code == "path_escape"
+    assert caught.value.exit_code == 4
+    assert (final / "original").read_bytes() == sealed
+
+
+def test_rename_exdev_stays_cross_device(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """EXDEV keeps its own code and does not publish the final directory."""
+
+    def fail(source: Path, destination: Path) -> None:
+        del source, destination
+        raise OSError(errno.EXDEV, "Invalid cross-device link")
+
+    monkeypatch.setattr("cfi.application.ingest.rename_exclusive", fail)
+    with pytest.raises(IngestFailure) as caught:
+        ingest(
+            IngestSettings(data_root=tmp_path),
+            IngestRequest(
+                input_path=_input(tmp_path),
+                source_id=SOURCE,
+                dataset_version=VERSION,
+                run_id="bronze-001",
+            ),
+        )
+    assert caught.value.code == "cross_device"
+    assert caught.value.exit_code == 4
+    assert not _bronze(tmp_path).exists()
+
+
+def test_classified_write_error_is_structured_on_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The CLI envelope and event carry storage_error without paths or checksums."""
+
+    source = tmp_path / "input.bin"
+    source.write_bytes(_payload())
+    root = tmp_path / "data"
+    monkeypatch.setenv("CFI_DATA_ROOT", str(root))
+    monkeypatch.setattr("cfi.infrastructure.storage.os.write", _refuse_storage_write(errno.ENOSPC))
+    code = main(
+        [
+            "ingest",
+            "--input",
+            str(source),
+            "--source-id",
+            SOURCE,
+            "--dataset-version",
+            VERSION,
+            "--run-id",
+            "bronze-001",
+        ]
+    )
+    captured = capsys.readouterr()
+    assert code == 4
+    assert json.loads(captured.out) == {
+        "code": "storage_error",
+        "dry_run": False,
+        "exit_code": 4,
+        "status": "rejected",
+    }
+    digest = hashlib.sha256(_payload()).hexdigest()
+    assert "Traceback" not in captured.err
+    assert str(root) not in captured.err
+    assert str(tmp_path) not in captured.err
+    assert digest not in captured.err
+    assert "input_sha256" not in captured.err
+    events = [json.loads(line) for line in captured.err.splitlines() if line]
+    assert [event["event_name"] for event in events] == ["command_started", "command_finished"]
+    assert events[1]["status"] == "rejected"
+    assert events[1]["error_code"] == "storage_error"
+    assert events[1]["exit_code"] == 4

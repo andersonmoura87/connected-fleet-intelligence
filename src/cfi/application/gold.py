@@ -44,12 +44,14 @@ from cfi.infrastructure.parquet import (
 from cfi.infrastructure.storage import (
     StorageFailure,
     assert_tree_has_no_reparse,
+    create_directory,
     fsync_directory,
     hash_file,
     is_reparse_point,
-    remove_tree_nofollow,
+    remove_unpublished,
     rename_exclusive,
     replace_file,
+    retain_primary,
     write_bytes_fsync,
 )
 
@@ -521,9 +523,12 @@ def _publish_snapshot(
     incoming = root / "gold" / ".incoming"
     temp = incoming / secrets.token_hex(16)
     published = False
+    completed = False
+    peer: GoldGeneration | None = None
+    primary: Exception | None = None
     try:
         assert_tree_has_no_reparse(root, final.parent)
-        temp.mkdir(parents=True)
+        create_directory(temp)
         summary_bytes = _canonical(context.summary)
         summary_sha = hashlib.sha256(summary_bytes).hexdigest()
         manifest = _manifest(settings, context, summary_sha, len(summary_bytes))
@@ -531,15 +536,16 @@ def _publish_snapshot(
         write_bytes_fsync(temp / "manifest.json", _canonical(manifest))
         if hooks.before_snapshot_rename is not None:
             hooks.before_snapshot_rename()
-        final.parent.mkdir(parents=True, exist_ok=True)
+        create_directory(final.parent, exist_ok=True)
         assert_tree_has_no_reparse(root, final)
         try:
             rename_exclusive(temp, final)
         except FileExistsError:
-            kind, peer = _observe_snapshot(final, context.summary, context.gold_key)
-            if kind == "sealed" and peer is not None:
-                return peer
-            if kind == "conflict":
+            kind, found = _observe_snapshot(final, context.summary, context.gold_key)
+            if kind == "sealed" and found is not None:
+                peer = found
+                completed = True
+            elif kind == "conflict":
                 raise _Halt(
                     _success(
                         context,
@@ -552,18 +558,19 @@ def _publish_snapshot(
                         replaced=False,
                     )
                 ) from None
-            raise _Halt(
-                _success(
-                    context,
-                    status="rejected",
-                    code="integrity_incomplete",
-                    exit_code=3,
-                    snapshot_state="snapshot_incomplete",
-                    pointer_state="pointer_unchanged",
-                    durable=False,
-                    replaced=False,
-                )
-            ) from None
+            else:
+                raise _Halt(
+                    _success(
+                        context,
+                        status="rejected",
+                        code="integrity_incomplete",
+                        exit_code=3,
+                        snapshot_state="snapshot_incomplete",
+                        pointer_state="pointer_unchanged",
+                        durable=False,
+                        replaced=False,
+                    )
+                ) from None
         except StorageFailure as exc:
             raise _Halt(_storage_result(context, exc.code)) from exc
         except OSError as exc:
@@ -571,17 +578,26 @@ def _publish_snapshot(
             if exc.errno == errno.EXDEV or winerror == 17:
                 raise _Halt(_storage_result(context, "cross_device")) from exc
             raise _Halt(_storage_result(context, "storage_error")) from exc
-        published = True
-        if hooks.after_snapshot_rename is not None:
-            hooks.after_snapshot_rename()
-        _require_intact_snapshot(root, context)
-        fsync_directory(final.parent)
-        return None
+        else:
+            published = True
+            if hooks.after_snapshot_rename is not None:
+                hooks.after_snapshot_rename()
+            _require_intact_snapshot(root, context)
+            fsync_directory(final.parent)
+            completed = True
     except StorageFailure as exc:
-        raise _Halt(_storage_result(context, exc.code)) from exc
-    finally:
-        if not published and temp.exists():
-            remove_tree_nofollow(temp, incoming)
+        primary = _halt_from_storage(context, exc)
+    except Exception as exc:
+        primary = exc
+    if not published:
+        primary = remove_unpublished(temp, incoming, primary, decided=completed)
+    if isinstance(primary, StorageFailure):
+        primary = _halt_from_storage(context, primary)
+    if primary is not None:
+        raise primary
+    if not completed:
+        raise RuntimeError("snapshot publish produced no result")
+    return peer
 
 
 def _replace_pointer(
@@ -596,9 +612,10 @@ def _replace_pointer(
     incoming = pointer_dir / ".incoming"
     temp = incoming / f"{secrets.token_hex(16)}.json"
     replaced = False
+    primary: Exception | None = None
     try:
         assert_tree_has_no_reparse(root, pointer_dir)
-        incoming.mkdir(parents=True, exist_ok=True)
+        create_directory(incoming, exist_ok=True)
         summary_sha = hashlib.sha256(_canonical(context.summary)).hexdigest()
         pointer = GoldPointer(
             pointer_version="1",
@@ -617,24 +634,20 @@ def _replace_pointer(
             hooks.after_pointer_replace()
         fsync_directory(pointer_dir)
     except StorageFailure as exc:
-        mapped = (
-            exc.code
-            if exc.code in {"reparse_point", "path_escape", "cross_device"}
-            else "storage_error"
-        )
-        raise _Halt(
-            _copy(
-                snapshot,
-                status="partial",
-                code=mapped,
-                exit_code=4,
-                pointer_state="pointer_unchanged",
-                pointer_replaced=False,
-            )
-        ) from exc
-    finally:
-        if not replaced and temp.exists() and not is_reparse_point(temp):
+        primary = _halt_partial(snapshot, exc)
+    except Exception as exc:
+        primary = exc
+    if not replaced and temp.exists() and not is_reparse_point(temp):
+        try:
             temp.unlink()
+        except Exception as exc:
+            retained = retain_primary(primary, exc, decided=False)
+            if retained is not None:
+                primary = retained
+    if isinstance(primary, StorageFailure):
+        primary = _halt_partial(snapshot, primary)
+    if primary is not None:
+        raise primary
 
 
 def _load_silver(
@@ -1119,6 +1132,34 @@ def _copy(
         average_duration_seconds=snapshot.average_duration_seconds,
         rejected_count=snapshot.rejected_count,
     )
+
+
+def _halt_from_storage(context: _Context, exc: StorageFailure) -> _Halt:
+    try:
+        raise _Halt(_storage_result(context, exc.code)) from exc
+    except _Halt as halt:
+        return halt
+
+
+def _halt_partial(snapshot: GoldResult, exc: StorageFailure) -> _Halt:
+    mapped = (
+        exc.code
+        if exc.code in {"reparse_point", "path_escape", "cross_device"}
+        else "storage_error"
+    )
+    try:
+        raise _Halt(
+            _copy(
+                snapshot,
+                status="partial",
+                code=mapped,
+                exit_code=4,
+                pointer_state="pointer_unchanged",
+                pointer_replaced=False,
+            )
+        ) from exc
+    except _Halt as halt:
+        return halt
 
 
 def _storage_result(context: _Context, code: str) -> GoldResult:

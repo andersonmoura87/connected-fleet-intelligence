@@ -3,7 +3,6 @@
 import errno
 import hashlib
 import json
-import os
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -12,7 +11,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from cfi.application.errors import integrity, lock_unavailable, storage, usage
+from cfi.application.errors import IngestFailure, integrity, lock_unavailable, storage, usage
 from cfi.domain.bronze import BronzeManifest
 from cfi.domain.generation import (
     QUARANTINE_COLUMNS,
@@ -37,9 +36,10 @@ from cfi.infrastructure.storage import (
     assert_tree_has_no_reparse,
     create_directory,
     fsync_directory,
+    fsync_file,
     hash_file,
     is_reparse_point,
-    remove_tree_nofollow,
+    remove_unpublished,
     rename_exclusive,
     write_bytes_fsync,
 )
@@ -260,6 +260,8 @@ def _publish(
     incoming = root / "silver" / ".incoming"
     temp = incoming / secrets.token_hex(16)
     published = False
+    result: TransformResult | None = None
+    primary: Exception | None = None
     try:
         assert_tree_has_no_reparse(root, final.parent)
         create_directory(temp)
@@ -308,7 +310,7 @@ def _publish(
         try:
             rename_exclusive(temp, final)
         except FileExistsError:
-            return _finish_existing_or_plan(
+            result = _finish_existing_or_plan(
                 root,
                 final,
                 bronze,
@@ -326,28 +328,37 @@ def _publish(
             if exc.errno == errno.EXDEV or winerror == 17:
                 raise storage("cross_device") from exc
             raise storage("storage_error") from exc
-        published = True
-        if hooks.after_rename is not None:
-            hooks.after_rename()
-        confirmed = _inspect_generation(final, source_id, dataset_version, bronze.input_sha256, key)
-        if confirmed[0] != "sealed" or confirmed[1] is None:
-            raise integrity("integrity_mismatch")
-        if (
-            confirmed[1].silver_sha256 != silver_sha
-            or confirmed[1].quarantine_sha256 != quarantine_sha
-        ):
-            raise integrity("integrity_mismatch")
-        fsync_directory(final.parent)
-        return _result(
-            batch, bronze, source_id, dataset_version, run_id, run_id, key, dry_run=False
-        )
+        else:
+            published = True
+            if hooks.after_rename is not None:
+                hooks.after_rename()
+            confirmed = _inspect_generation(
+                final, source_id, dataset_version, bronze.input_sha256, key
+            )
+            if confirmed[0] != "sealed" or confirmed[1] is None:
+                raise integrity("integrity_mismatch")
+            if (
+                confirmed[1].silver_sha256 != silver_sha
+                or confirmed[1].quarantine_sha256 != quarantine_sha
+            ):
+                raise integrity("integrity_mismatch")
+            fsync_directory(final.parent)
+            result = _result(
+                batch, bronze, source_id, dataset_version, run_id, run_id, key, dry_run=False
+            )
     except StorageFailure as exc:
-        if exc.code in {"reparse_point", "path_escape", "rename_noreplace_unavailable"}:
-            raise storage(exc.code) from exc
-        raise storage("storage_error") from exc
-    finally:
-        if not published and temp.exists():
-            remove_tree_nofollow(temp, incoming)
+        primary = _failure_from_storage(exc)
+    except Exception as exc:
+        primary = exc
+    if not published:
+        primary = remove_unpublished(temp, incoming, primary, decided=result is not None)
+    if isinstance(primary, StorageFailure):
+        primary = _failure_from_storage(primary)
+    if primary is not None:
+        raise primary
+    if result is None:
+        raise RuntimeError("transform publish produced no result")
+    return result
 
 
 def _reject_long_paths(root: Path) -> None:
@@ -624,14 +635,16 @@ def _result(
 
 
 def _fsync_file(path: Path) -> None:
-    flags = os.O_RDWR
-    if hasattr(os, "O_BINARY"):
-        flags |= os.O_BINARY
-    descriptor = os.open(path, flags)
+    fsync_file(path)
+
+
+def _failure_from_storage(exc: StorageFailure) -> IngestFailure:
     try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
+        if exc.code in {"reparse_point", "path_escape", "rename_noreplace_unavailable"}:
+            raise storage(exc.code) from exc
+        raise storage("storage_error") from exc
+    except IngestFailure as mapped:
+        return mapped
 
 
 def _storage_code(code: str) -> str:

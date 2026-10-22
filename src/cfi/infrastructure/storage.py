@@ -14,6 +14,7 @@ import hashlib
 import os
 import stat
 from pathlib import Path
+from typing import NoReturn
 
 _CHUNK = 1024 * 1024
 _RENAME_NOREPLACE = 1
@@ -46,15 +47,87 @@ class StorageFailure(OSError):
         self.code = code
 
 
+_STORAGE_IO_ERRNOS = frozenset({errno.ENOSPC, errno.EIO, errno.EACCES, errno.EROFS})
+_CLEANUP_SECURITY_CODES = frozenset({"path_escape", "reparse_point"})
+
+
+def storage_io_errno(code: int | None) -> bool:
+    """Return whether this errno is classified at a write or directory boundary."""
+
+    return code in _STORAGE_IO_ERRNOS
+
+
+def _raise_storage_io(exc: OSError) -> NoReturn:
+    """Map an allowlisted write errno to storage_error. Leave every other errno unchanged."""
+
+    if isinstance(exc, StorageFailure):
+        raise exc
+    if exc.errno in _STORAGE_IO_ERRNOS:
+        raise StorageFailure("storage_error") from exc
+    raise exc
+
+
+def _close_fd(fd: int, pending: Exception | None) -> None:
+    """Close one descriptor. A close error must not replace a write or read error."""
+
+    try:
+        os.close(fd)
+    except OSError:
+        if pending is None:
+            raise
+
+
+def retain_primary(
+    primary: Exception | None,
+    cleanup: Exception,
+    *,
+    decided: bool,
+) -> Exception | None:
+    """Choose the failure that remains after an unpublished temporary is removed.
+
+    path_escape and reparse_point stay visible. A common cleanup error does not
+    replace a primary failure or a decided publication result. When cleanup is
+    the only failure, that error is returned.
+    """
+
+    security = isinstance(cleanup, StorageFailure) and cleanup.code in _CLEANUP_SECURITY_CODES
+    if security:
+        if primary is not None:
+            primary.__context__ = cleanup
+            return primary
+        return cleanup
+    if primary is not None or decided:
+        return primary
+    return cleanup
+
+
+def remove_unpublished(
+    path: Path,
+    ancestor: Path,
+    primary: Exception | None,
+    *,
+    decided: bool,
+) -> Exception | None:
+    """Remove one unpublished temporary. Keep the publication outcome when removal fails."""
+
+    if not path.exists():
+        return primary
+    try:
+        remove_tree_nofollow(path, ancestor)
+    except Exception as exc:
+        retained = retain_primary(primary, exc, decided=decided)
+        if retained is not None:
+            return retained
+    return primary
+
+
 def create_directory(path: Path, *, exist_ok: bool = False) -> None:
-    """Create a publication directory. A read-only or forbidden path is storage_error."""
+    """Create a publication directory. Allowlisted I/O errno values are storage_error."""
 
     try:
         path.mkdir(parents=True, exist_ok=exist_ok)
     except OSError as exc:
-        if exc.errno in {errno.EACCES, errno.EROFS}:
-            raise StorageFailure("storage_error") from exc
-        raise
+        _raise_storage_io(exc)
 
 
 def is_reparse_point(path: Path) -> bool:
@@ -126,40 +199,107 @@ def hash_file(path: Path, max_bytes: int) -> tuple[str, int]:
 
 
 def write_bytes_fsync(path: Path, payload: bytes) -> None:
-    fd = os.open(path, _write_flags())
+    """Create one new file and fsync it. Allowlisted write errno values are storage_error."""
+
+    try:
+        fd = os.open(path, _write_flags())
+    except OSError as exc:
+        _raise_storage_io(exc)
+    pending: OSError | None = None
     try:
         view = memoryview(payload)
         while view:
-            written = os.write(fd, view)
+            try:
+                written = os.write(fd, view)
+            except OSError as exc:
+                pending = exc
+                break
             view = view[written:]
-        os.fsync(fd)
+        if pending is None:
+            try:
+                os.fsync(fd)
+            except OSError as exc:
+                pending = exc
     finally:
-        os.close(fd)
+        _close_fd(fd, pending)
+    if pending is not None:
+        _raise_storage_io(pending)
 
 
 def copy_hashed(source: Path, destination: Path, max_bytes: int) -> tuple[str, int]:
+    """Copy bytes and fsync the destination. Read errors stay unclassified."""
+
     src_fd = os.open(source, _read_flags())
-    dst_fd = os.open(destination, _write_flags())
+    pending: OSError | None = None
+    read_error: OSError | None = None
+    dst_fd: int | None = None
     hasher = hashlib.sha256()
     size = 0
     try:
-        while True:
-            chunk = os.read(src_fd, _CHUNK)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > max_bytes:
-                raise StorageFailure("input_too_large")
-            hasher.update(chunk)
-            view = memoryview(chunk)
-            while view:
-                written = os.write(dst_fd, view)
-                view = view[written:]
-        os.fsync(dst_fd)
+        try:
+            dst_fd = os.open(destination, _write_flags())
+        except OSError as exc:
+            pending = exc
+        if dst_fd is not None and pending is None:
+            while True:
+                try:
+                    chunk = os.read(src_fd, _CHUNK)
+                except OSError as exc:
+                    read_error = exc
+                    break
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    pending = StorageFailure("input_too_large")
+                    break
+                hasher.update(chunk)
+                view = memoryview(chunk)
+                try:
+                    while view:
+                        written = os.write(dst_fd, view)
+                        view = view[written:]
+                except OSError as exc:
+                    pending = exc
+                    break
+            if pending is None and read_error is None:
+                try:
+                    os.fsync(dst_fd)
+                except OSError as exc:
+                    pending = exc
     finally:
-        os.close(src_fd)
-        os.close(dst_fd)
+        if dst_fd is not None:
+            _close_fd(dst_fd, pending if read_error is None else read_error)
+        _close_fd(src_fd, pending if read_error is None else read_error)
+    if read_error is not None:
+        raise read_error
+    if isinstance(pending, StorageFailure):
+        raise pending
+    if pending is not None:
+        _raise_storage_io(pending)
     return hasher.hexdigest(), size
+
+
+def fsync_file(path: Path) -> None:
+    """Fsync one existing file. Allowlisted errno values are storage_error."""
+
+    flags = os.O_RDWR
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        _raise_storage_io(exc)
+    pending: OSError | None = None
+    try:
+        try:
+            os.fsync(fd)
+        except OSError as exc:
+            pending = exc
+    finally:
+        _close_fd(fd, pending)
+    if pending is not None:
+        _raise_storage_io(pending)
 
 
 def fsync_directory(path: Path) -> None:

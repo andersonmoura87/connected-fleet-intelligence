@@ -73,6 +73,34 @@ def test_erofs_while_opening_the_lock(tmp_path: Path, monkeypatch: MonkeyPatch) 
     assert not marker.exists()
 
 
+def test_storage_io_while_creating_the_lock_directory(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    for code in (errno.ENOSPC, errno.EIO):
+
+        def denied(
+            self: Path,
+            mode: int = 0o777,
+            parents: bool = False,
+            exist_ok: bool = False,
+            failed: int = code,
+        ) -> None:
+            del self, mode, parents, exist_ok
+            raise OSError(failed, os.strerror(failed))
+
+        monkeypatch.setattr(Path, "mkdir", denied)
+        try:
+            with source_lock(tmp_path / "bronze" / "locks" / "source=v1.lock", 1):
+                raise AssertionError("lock acquired")
+        except LockPathDenied as exc:
+            assert exc.code == "storage_error"
+            assert isinstance(exc.__cause__, OSError)
+            assert exc.__cause__.errno == code
+        else:
+            raise AssertionError("storage errno was not classified")
+        monkeypatch.undo()
+
+
 def test_unexpected_lock_errors_stay_unclassified(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
     def denied(path: str | Path, flags: int, mode: int = 0o777) -> int:
         del path, flags, mode

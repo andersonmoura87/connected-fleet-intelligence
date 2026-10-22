@@ -12,12 +12,11 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from cfi.infrastructure.storage import StorageFailure
+from cfi.infrastructure.storage import StorageFailure, storage_io_errno
 
 _BUSY = {errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK}
 if hasattr(errno, "EDEADLK"):
     _BUSY.add(errno.EDEADLK)
-_DENIED = {errno.EACCES, errno.EROFS}
 
 
 class LockUnavailable(TimeoutError):
@@ -44,7 +43,7 @@ def source_lock(path: Path, timeout_seconds: float) -> Iterator[int]:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        if exc.errno in _DENIED:
+        if storage_io_errno(exc.errno):
             raise LockPathDenied() from exc
         raise
     flags = os.O_CREAT | os.O_RDWR
